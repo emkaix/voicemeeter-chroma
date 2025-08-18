@@ -33,20 +33,23 @@ window_manager::window_manager()
 
         UINT creation_flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_SINGLETHREADED;
 
-        D3D_FEATURE_LEVEL featureLevels[] = {D3D_FEATURE_LEVEL_11_0};
-        winrt::check_hresult(D3D11CreateDevice(
+        D3D_FEATURE_LEVEL featureLevels[] = {
+            D3D_FEATURE_LEVEL_11_0,
+            D3D_FEATURE_LEVEL_10_1,
+            D3D_FEATURE_LEVEL_10_0,
+            };
+       winrt::check_hresult(D3D11CreateDevice(
             nullptr,
             D3D_DRIVER_TYPE_HARDWARE,
             nullptr,
             creation_flags,
             featureLevels,
-            1,
+            3,
             D3D11_SDK_VERSION,
             d3d_device.put(),
             nullptr,
             nullptr
         ));
-
         dxgi_device = d3d_device.as<IDXGIDevice>();
         winrt::check_hresult(dxgi_device->GetAdapter(adapter.put()));
         dxgi_factory.capture(adapter, &IDXGIAdapter::GetParent);
