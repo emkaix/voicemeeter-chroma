@@ -1,12 +1,11 @@
-name: CI Build
+name: VMChroma Snapshot Build
 
 on:
   push:
     branches:
-      - main
+      - master
     paths:
       - 'src/**'
-      - '.github/workflows/build.yml'
   workflow_dispatch:
 
 jobs:
@@ -33,5 +32,5 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: build-output
+          name: vmchroma_snapshot_${{ github.sha }}
           path: out/
