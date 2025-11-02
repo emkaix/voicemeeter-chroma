@@ -36,3 +36,8 @@ extern BOOL (WINAPI *o_TrackPopupMenu)(HMENU hMenu, UINT uFlags, int x, int y, i
 extern BOOL (WINAPI *o_GetClientRect)(HWND hWnd, LPRECT lpRect);
 extern HWND (WINAPI *o_CreateWindowExA)(DWORD dwExStyle, LPCSTR lpClassName, LPCSTR lpWindowName, DWORD dwStyle, int X, int Y, int nWidth, int nHeight, HWND hWndParent, HMENU hMenu, HINSTANCE hInstance, LPVOID lpParam);
 extern INT_PTR (WINAPI *o_DialogBoxIndirectParamA)(HINSTANCE hInstance, LPCDLGTEMPLATEA hDialogTemplate, HWND hWndParent, DLGPROC lpDialogFunc, LPARAM dwInitParam);
+extern HRESULT (WINAPI *o_CoCreateInstance)(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWORD dwClsContext, REFIID riid, LPVOID* ppv);
+extern int (WINAPI *o_InternalGetWindowText)(HWND hWnd, LPWSTR pString, int cchMaxCount);
+extern BOOL (WINAPI *o_GetFileVersionInfoW)(LPCWSTR lptstrFilename, DWORD dwHandle, DWORD dwLen, LPVOID lpData);
+extern BOOL (WINAPI *o_VerQueryValueW)(LPCVOID pBlock, LPCWSTR lpSubBlock, LPVOID* lplpBuffer, PUINT puLen);
+extern HANDLE (WINAPI *o_OpenProcess)(DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwProcessId);

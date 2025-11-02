@@ -78,6 +78,7 @@ private:
 public:
     window_manager();
     static constexpr std::string_view MAINWINDOW_CLASSNAME = "VBCABLE0Voicemeeter0MainWindow0";
+    static constexpr std::wstring_view MAINWINDOW_CLASSNAME_UNICODE = L"VBCABLE0Voicemeeter0MainWindow0";
     static constexpr std::string_view COMPDENOISE_CLASSNAME_ANSI = "C_VB2CTL_Free_00\xA9VBurel";
     static constexpr std::wstring_view COMPDENOISE_CLASSNAME_UNICODE = L"C_VB2CTL_Free_00©VBurel";
     static constexpr std::string_view WDB_CLASSNAME_ANSI = "C_VB2CTL_Free_00_wdb\xA9VBurel";

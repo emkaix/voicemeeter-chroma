@@ -31,29 +31,31 @@ window_manager::window_manager()
     {
         winrt::check_hresult(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, d2d_factory.put()));
 
-        UINT creation_flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_SINGLETHREADED;
+        const UINT creation_flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_SINGLETHREADED;
 
-        D3D_FEATURE_LEVEL featureLevels[] = {
+        const D3D_FEATURE_LEVEL feature_levels[] = {
+            D3D_FEATURE_LEVEL_11_1,
             D3D_FEATURE_LEVEL_11_0,
             D3D_FEATURE_LEVEL_10_1,
             D3D_FEATURE_LEVEL_10_0,
-            };
-       winrt::check_hresult(D3D11CreateDevice(
+        };
+
+        winrt::check_hresult(D3D11CreateDevice(
             nullptr,
             D3D_DRIVER_TYPE_HARDWARE,
             nullptr,
             creation_flags,
-            featureLevels,
-            3,
+            feature_levels,
+            4,
             D3D11_SDK_VERSION,
             d3d_device.put(),
             nullptr,
             nullptr
         ));
+
         dxgi_device = d3d_device.as<IDXGIDevice>();
         winrt::check_hresult(dxgi_device->GetAdapter(adapter.put()));
         dxgi_factory.capture(adapter, &IDXGIAdapter::GetParent);
-
         winrt::check_hresult(d2d_factory->CreateDevice(dxgi_device.get(), d2d_device.put()));
     }
     catch (const winrt::hresult_error& ex)

@@ -25,7 +25,7 @@ endif ()
 # ---------------- #
 
 add_compile_definitions(
-        VMCHROMA_VERSION="vmchroma 0.2.1"
+        VMCHROMA_VERSION="vmchroma 0.3.0"
         UNICODE
         ARCH_POSTFIX="${ARCH_POSTFIX}"
         SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE
@@ -82,21 +82,6 @@ set(YAML_CPP_BUILD_FLAGS /MT)
 target_compile_options(yaml-cpp PRIVATE /W0)
 
 # ------------------ #
-# External: capstone #
-# ------------------ #
-
-FetchContent_Declare(
-        capstone
-        URL https://github.com/capstone-engine/capstone/archive/refs/tags/5.0.6.zip
-        SOURCE_DIR ${CMAKE_SOURCE_DIR}/external/capstone
-)
-set(CAPSTONE_ARCHITECTURE_DEFAULT OFF CACHE BOOL "" FORCE)
-set(CAPSTONE_X86_SUPPORT ON CACHE BOOL "" FORCE)
-set(CAPSTONE_BUILD_STATIC_MSVC_RUNTIME ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(capstone)
-set(CAPSTONE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/external/capstone/include)
-
-# ------------------ #
 # External: spdlog   #
 # ------------------ #
 
@@ -130,7 +115,6 @@ endif ()
 add_library(${TARGET_VMCHROMA} SHARED ${VMCHROMA_SOURCES})
 target_include_directories(${TARGET_VMCHROMA} PUBLIC ${DETOURS_SOURCE})
 target_include_directories(${TARGET_VMCHROMA} PUBLIC ${SPDLOG_INCLUDE_DIR})
-target_include_directories(${TARGET_VMCHROMA} PUBLIC ${CAPSTONE_INCLUDE_DIR})
 target_link_libraries(${TARGET_VMCHROMA} PRIVATE
         lib_detours
         yaml-cpp::yaml-cpp
@@ -141,8 +125,8 @@ target_link_libraries(${TARGET_VMCHROMA} PRIVATE
         dxgi
         Version
         advapi32
-        capstone
         windowsapp
+        ole32
 )
 set_target_properties(${TARGET_VMCHROMA} PROPERTIES
         LINK_FLAGS "/EXPORT:dummy_export,@1"
@@ -200,3 +184,13 @@ add_custom_command(
         DEPENDS ${CONFIG_SOURCE_FILE}
 )
 add_custom_target(CopyConfig ALL DEPENDS ${CONFIG_DEST_FILE})
+
+# ------------------------------------------------- #
+# Target (debug): copy DLLs to Voicemeeter dir      #
+# ------------------------------------------------- #
+set(VOICEMEETER_INSTALL_DIR "C:/Program Files (x86)/VB/Voicemeeter")
+add_custom_target(copy_dlls_for_debugging
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:vmchroma> "${VOICEMEETER_INSTALL_DIR}/vmchroma${ARCH_POSTFIX}.dll"
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_PDB_FILE:vmchroma> "${VOICEMEETER_INSTALL_DIR}/vmchroma${ARCH_POSTFIX}.pdb"
+        DEPENDS vmchroma
+)

@@ -1,16 +1,33 @@
 theme:
-  banana:
-  potato:
-  default:
+  banana: ~
+  potato: ~
+  standard: ~
 
+potato:
+  # List of programs you want to hide from the virtual input strip
+  appBlacklist:
+#    - steam.exe
+#    - steamwebhelper.exe
+#    - msrdc.exe
+  
+  # Assign custom names to apps. The custom name replaces the "product name"
+  appAliasMap:
+#    example1.exe: Custom Name 1
+#    example2.exe: Custom Name 2
+  
+  # Always display the app "product name" instead of the current window title
+  # For example, this will display "Spotify" instead of the currently played song
+  # Range: true | false
+  alwaysUseAppName: true
+  
 misc:
-  # Amount of dB change when scrolling with mouse wheel
-  # Range: 1 ≤ value
-  faderScrollStep: 3
+  # Amount of dB change when scrolling with mouse wheel on strip fader
+  # Range: 0.1 ≤ value
+  faderScrollStep: 1.0
 
-  # (x64 only) Amount of dB change when scrolling with mouse wheel while holding shift
-  # Range: 1 ≤ value
-  faderShiftScrollStep: 3
+  # Amount of dB change when scrolling with mouse wheel on strip fader while holding shift 
+  # Range: 0.1 ≤ value
+  faderShiftScrollStep: 0.1
 
   # Font rendering quality
   # Range: 0 ≤ value ≤ 6

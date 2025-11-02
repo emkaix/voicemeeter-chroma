@@ -26,11 +26,15 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <shlobj.h>
 #include <wingdi.h>
 #include <d2d1_1.h>
+#include <mmdeviceapi.h>
+#include <audiopolicy.h>
+#include <psapi.h>
 
 #include "utils.hpp"
 #include "winapi_hook_defs.hpp"
 #include "window_manager.hpp"
 #include "config_manager.hpp"
+#include "spdlog/fmt/bundled/ranges.h"
 
 //******************//
 //      WINAPI      //
@@ -54,8 +58,20 @@ BOOL (WINAPI *o_TrackPopupMenu)(HMENU hMenu, UINT uFlags, int x, int y, int nRes
 BOOL (WINAPI *o_GetClientRect)(HWND hWnd, LPRECT lpRect) = GetClientRect;
 HWND (WINAPI *o_CreateWindowExA)(DWORD dwExStyle, LPCSTR lpClassName, LPCSTR lpWindowName, DWORD dwStyle, int X, int Y, int nWidth, int nHeight, HWND hWndParent, HMENU hMenu, HINSTANCE hInstance, LPVOID lpParam) = CreateWindowExA;
 INT_PTR (WINAPI *o_DialogBoxIndirectParamA)(HINSTANCE hInstance, LPCDLGTEMPLATEA hDialogTemplate, HWND hWndParent, DLGPROC lpDialogFunc, LPARAM dwInitParam) = DialogBoxIndirectParamA;
+HRESULT (WINAPI *o_CoCreateInstance)(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWORD dwClsContext, REFIID riid, LPVOID* ppv) = CoCreateInstance;
+int (WINAPI *o_InternalGetWindowText)(HWND hWnd, LPWSTR pString, int cchMaxCount) = InternalGetWindowText;
+BOOL (WINAPI *o_GetFileVersionInfoW)(LPCWSTR lptstrFilename, DWORD dwHandle, DWORD dwLen, LPVOID lpData) = GetFileVersionInfoW;
+BOOL (WINAPI *o_VerQueryValueW)(LPCVOID pBlock, LPCWSTR lpSubBlock, LPVOID* lplpBuffer, PUINT puLen) = VerQueryValueW;
+HANDLE (WINAPI *o_OpenProcess)(DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwProcessId) = OpenProcess;
 
-static signature_t sig_handle_scroll = {{0x48, 0x89, 0x74, 0x24, 0x20, 0x41, 0x54, 0x48, 0x83, 0xEC, 0x00, 0x83, 0xB9}, {"xxxxxxxxxx?xx"}};
+//******************//
+//       COM        //
+//******************//
+
+HRESULT (STDMETHODCALLTYPE *o_GetSessionEnumerator)(IAudioSessionManager2* this_ptr, IAudioSessionEnumerator** SessionEnum) = nullptr;
+HRESULT (STDMETHODCALLTYPE *o_GetSession)(IAudioSessionEnumerator* this_ptr, int SessionCount, IAudioSessionControl** Session) = nullptr;
+HRESULT (STDMETHODCALLTYPE *o_GetProcessId)(IAudioSessionControl2* this_ptr, DWORD* pRetVal) = nullptr;
+HRESULT (STDMETHODCALLTYPE *o_IsSystemSoundsSession)(IAudioSessionControl2* this_ptr) = nullptr;
 
 //******************//
 //      GLOBALS     //
@@ -64,18 +80,14 @@ static signature_t sig_handle_scroll = {{0x48, 0x89, 0x74, 0x24, 0x20, 0x41, 0x5
 std::unique_ptr<window_manager> wm;
 std::unique_ptr<config_manager> cm;
 
-static std::unordered_map<long, long> font_height_map = {
-    {20, 18}, // input custom label
-    {16, 15} // master section fader
-};
-
 static bool init_entered = false;
-static o_scroll_handler_t o_scroll_handler = nullptr;
+static float scroll_value = 3.0f;
 static WNDPROC o_WndProc_main = nullptr;
 static o_WndProc_chldwnd_t o_WndProc_comp = nullptr;
 static o_WndProc_chldwnd_t o_WndProc_denoiser = nullptr;
 static o_WndProc_chldwnd_t o_WndProc_wdb = nullptr;
 static HMENU tray_menu = nullptr;
+static std::wstring file_version_buffer;
 
 bool apply_hooks();
 
@@ -130,10 +142,15 @@ HANDLE WINAPI hk_CreateMutexA(LPSECURITY_ATTRIBUTES lpMutexAttributes, BOOL bIni
  */
 HFONT WINAPI hk_CreateFontIndirectA(const LOGFONTA* lplf)
 {
+    std::unordered_map<long, long> font_height_map = {
+        {20, 18}, // input custom label
+        {16, 15} // master section fader
+    };
+
     LOGFONTA modified_log_font = *lplf;
     const long new_size = font_height_map[lplf->lfHeight];
     modified_log_font.lfHeight = new_size != 0 ? new_size : lplf->lfHeight;
-    modified_log_font.lfQuality = *cm->cfg_get_font_quality();
+    modified_log_font.lfQuality = *cm->get_font_quality();
 
     return o_CreateFontIndirectA(&modified_log_font);
 }
@@ -219,7 +236,7 @@ UINT_PTR WINAPI hk_SetTimer(HWND hWnd, UINT_PTR nIDEvent, UINT uElapse, TIMERPRO
 {
     if (nIDEvent == 12346)
     {
-        if (const auto interval = cm->cfg_get_ui_update_interval())
+        if (const auto interval = cm->get_ui_update_interval())
             return o_SetTimer(hWnd, nIDEvent, *interval, lpTimerFunc);
     }
 
@@ -253,30 +270,6 @@ BOOL WINAPI hk_Rectangle(HDC hdc, int left, int top, int right, int bottom)
     }
 
     return o_Rectangle(hdc, left, top, right, bottom);
-}
-
-/**
- * Handler function called on WM_MOUSEWHEEL messages
- * We hook this function in order to change the amount of dB change on the faders
- * Values are parsed from the vmchroma.yaml file
- */
-void ARCH_CALL hk_scroll_handler(uint64_t* a1, HWND hwnd, uint32_t x, uint32_t y, uint32_t a5)
-{
-    const auto shift_val = cm->cfg_get_fader_shift_scroll_step();
-    const auto normal_val = cm->cfg_get_fader_scroll_step();
-
-    if (GetAsyncKeyState(VK_SHIFT) & 0x8000)
-    {
-        if (shift_val)
-            a5 *= *shift_val;
-    }
-    else
-    {
-        if (normal_val)
-            a5 *= *normal_val;
-    }
-
-    return o_scroll_handler(a1, hwnd, x, y, a5);
 }
 
 /**
@@ -370,22 +363,37 @@ BOOL WINAPI hk_GetClientRect(HWND hWnd, LPRECT lpRect)
     const int len = GetClassNameW(hWnd, class_name.data(), 256);
     class_name.resize(len);
 
-    if (class_name == window_manager::WDB_CLASSNAME_UNICODE)
-    {
-        lpRect->left = 0;
-        lpRect->top = 0;
-        lpRect->right = 100;
-        lpRect->bottom = 386;
-        return TRUE;
-    }
+    const auto parent_hwnd = GetAncestor(hWnd, GA_PARENT);
 
-    if (class_name == window_manager::COMPDENOISE_CLASSNAME_UNICODE)
+    if (!parent_hwnd)
     {
-        lpRect->left = 0;
-        lpRect->top = 0;
-        lpRect->right = 153;
-        lpRect->bottom = 413;
-        return TRUE;
+        SPDLOG_ERROR("Error finding parent window");
+        return o_GetClientRect(hWnd, lpRect);
+    }
+    
+    auto parent_class_name = std::wstring(256, '\0');
+    const int parent_len = GetClassNameW(parent_hwnd, parent_class_name.data(), 256);
+    parent_class_name.resize(parent_len);
+
+    if (parent_class_name == window_manager::MAINWINDOW_CLASSNAME_UNICODE)
+    {
+        if (class_name == window_manager::WDB_CLASSNAME_UNICODE)
+        {
+            lpRect->left = 0;
+            lpRect->top = 0;
+            lpRect->right = 100;
+            lpRect->bottom = 386;
+            return TRUE;
+        }
+
+        if (class_name == window_manager::COMPDENOISE_CLASSNAME_UNICODE)
+        {
+            lpRect->left = 0;
+            lpRect->top = 0;
+            lpRect->right = 153;
+            lpRect->bottom = 413;
+            return TRUE;
+        }
     }
 
     return o_GetClientRect(hWnd, lpRect);
@@ -473,6 +481,12 @@ LRESULT ARCH_CALL hk_WndProc_main(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
         ClientToScreen(hwnd, &pt);
 
+        const auto shift_val = cm->get_fader_shift_scroll_step();
+        const auto normal_val = cm->get_fader_scroll_step();
+
+        if (shift_val && normal_val)
+            scroll_value = GetAsyncKeyState(VK_SHIFT) & 0x8000 ? *shift_val : *normal_val;
+
         const auto ret = o_WndProc_main(hwnd, msg, wParam, MAKELPARAM(pt.x, pt.y));
 
         wm->render(hwnd);
@@ -509,7 +523,7 @@ LRESULT ARCH_CALL hk_WndProc_main(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         uint32_t w, h;
         LRESULT ret;
 
-        auto restore_size_opt = cm->cfg_get_restore_size();
+        auto restore_size_opt = cm->get_restore_size();
 
         bool restore_size = true;
 
@@ -533,43 +547,16 @@ LRESULT ARCH_CALL hk_WndProc_main(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             ret = o_WndProc_main(hwnd, msg, wParam, lParam);
         }
 
-#if defined(_WIN64)
-        const auto o_scroll_handler_opt = utils::find_function_signature(sig_handle_scroll);
-
-        if (!o_scroll_handler_opt)
-        {
-            SPDLOG_ERROR("unable to find mouse scroll handler function");
-            return false;
-        }
-
-        o_scroll_handler = reinterpret_cast<o_scroll_handler_t>(*o_scroll_handler_opt);
-
         // patch mouse scroll instructions after integrity checks
-        if (!utils::apply_scroll_patch64(o_scroll_handler))
+#if defined(_WIN64)
+        if (!utils::apply_scroll_patch64(&scroll_value))
+#else
+        if (!utils::apply_scroll_patch32(&scroll_value))
+#endif
         {
             SPDLOG_ERROR("unable to apply scroll patch");
             return ret;
         }
-
-        if (!utils::hook_single_fn(&reinterpret_cast<PVOID&>(o_scroll_handler), hk_scroll_handler))
-        {
-            SPDLOG_ERROR("unable to hook scroll handler");
-            return ret;
-        }
-#else
-
-        const auto flavor_id = cm->get_current_flavor_id();
-        const auto scroll_val = cm->cfg_get_fader_scroll_step();
-
-        if (flavor_id && scroll_val)
-        {
-            if (!utils::apply_scroll_patch32(*flavor_id, *scroll_val))
-            {
-                SPDLOG_ERROR("unable to apply scroll patch");
-                return ret;
-            }
-        }
-#endif
 
         return ret;
     }
@@ -939,7 +926,7 @@ ATOM WINAPI hk_RegisterClassA(const WNDCLASSA* lpWndClass)
     {
         o_WndProc_main = lpWndClass->lpfnWndProc;
 
-        if (!utils::hook_single_fn(&reinterpret_cast<PVOID&>(o_WndProc_main), hk_WndProc_main))
+        if (!utils::hook_single_fn(&reinterpret_cast<PVOID&>(o_WndProc_main), reinterpret_cast<PVOID>(hk_WndProc_main)))
         {
             SPDLOG_ERROR("failed to hook main wndproc");
         }
@@ -957,15 +944,15 @@ HWND WINAPI hk_CreateWindowExA(DWORD dwExStyle, LPCSTR lpClassName, LPCSTR lpWin
     if (lpParam == nullptr)
         return o_CreateWindowExA(dwExStyle, lpClassName, lpWindowName, dwStyle, X, Y, nWidth, nHeight, hWndParent, hMenu, hInstance, lpParam);
 
-    auto lparam_info = static_cast<createwindowexa_lparam_t*>(lpParam);
+    const auto lparam_info = static_cast<createwindowexa_lparam_t*>(lpParam);
 
-    std::string class_name = lpClassName;
+    const std::string class_name = lpClassName;
 
     // denoiser window
     if (class_name == window_manager::COMPDENOISE_CLASSNAME_ANSI && o_WndProc_denoiser == nullptr && lparam_info->wnd_id >= 1200 && lparam_info->wnd_id <= 1204)
     {
         o_WndProc_denoiser = reinterpret_cast<o_WndProc_chldwnd_t>(lparam_info->wndproc);
-        if (!utils::hook_single_fn(&reinterpret_cast<PVOID&>(o_WndProc_denoiser), hk_WndProc_denoiser))
+        if (!utils::hook_single_fn(&reinterpret_cast<PVOID&>(o_WndProc_denoiser), reinterpret_cast<PVOID>(hk_WndProc_denoiser)))
         {
             SPDLOG_ERROR("failed to hook denoiser wndproc");
         }
@@ -975,7 +962,7 @@ HWND WINAPI hk_CreateWindowExA(DWORD dwExStyle, LPCSTR lpClassName, LPCSTR lpWin
     if (class_name == window_manager::COMPDENOISE_CLASSNAME_ANSI && o_WndProc_comp == nullptr && lparam_info->wnd_id >= 1100 && lparam_info->wnd_id <= 1104)
     {
         o_WndProc_comp = reinterpret_cast<o_WndProc_chldwnd_t>(lparam_info->wndproc);
-        if (!utils::hook_single_fn(&reinterpret_cast<PVOID&>(o_WndProc_comp), hk_WndProc_comp))
+        if (!utils::hook_single_fn(&reinterpret_cast<PVOID&>(o_WndProc_comp), reinterpret_cast<PVOID>(hk_WndProc_comp)))
         {
             SPDLOG_ERROR("failed to hook compressor wndproc");
         }
@@ -985,7 +972,7 @@ HWND WINAPI hk_CreateWindowExA(DWORD dwExStyle, LPCSTR lpClassName, LPCSTR lpWin
     if (class_name == window_manager::WDB_CLASSNAME_ANSI && o_WndProc_wdb == nullptr && lparam_info->wnd_id >= 1000 && lparam_info->wnd_id <= 1002)
     {
         o_WndProc_wdb = reinterpret_cast<o_WndProc_chldwnd_t>(lparam_info->wndproc);
-        if (!utils::hook_single_fn(&reinterpret_cast<PVOID&>(o_WndProc_wdb), hk_WndProc_wdb))
+        if (!utils::hook_single_fn(&reinterpret_cast<PVOID&>(o_WndProc_wdb), reinterpret_cast<PVOID>(hk_WndProc_wdb)))
         {
             SPDLOG_ERROR("failed to hook wdb wndproc");
         }
@@ -1004,7 +991,7 @@ INT_PTR WINAPI hk_DialogBoxIndirectParamA(HINSTANCE hInstance, LPCDLGTEMPLATEA h
     if (dwInitParam == 0)
         return o_DialogBoxIndirectParamA(hInstance, hDialogTemplate, hWndParent, lpDialogFunc, dwInitParam);
 
-    auto lparam = reinterpret_cast<dialogbox_initparam_t*>(dwInitParam);
+    const auto lparam = reinterpret_cast<dialogbox_initparam_t*>(dwInitParam);
 
     // 2016 is some magic value for all the "edit" dialogs
     if (hWndParent == wm->get_hwnd_main() && lparam->unk2 == 2016)
@@ -1021,6 +1008,263 @@ INT_PTR WINAPI hk_DialogBoxIndirectParamA(HINSTANCE hInstance, LPCDLGTEMPLATEA h
     }
 
     return o_DialogBoxIndirectParamA(hInstance, hDialogTemplate, hWndParent, lpDialogFunc, dwInitParam);
+}
+
+BOOL WINAPI hk_VerQueryValueW(LPCVOID pBlock, LPCWSTR lpSubBlock, LPVOID* lplpBuffer, PUINT puLen)
+{
+    if (file_version_buffer.empty() || wcsncmp(lpSubBlock, L"\\StringFileInfo", 15) != 0)
+        return o_VerQueryValueW(pBlock, lpSubBlock, lplpBuffer, puLen);
+
+    // alias should be applied
+    *lplpBuffer = file_version_buffer.data();
+    *puLen = file_version_buffer.length();
+
+    return TRUE;
+}
+
+BOOL WINAPI hk_GetFileVersionInfoW(LPCWSTR lptstrFilename, DWORD dwHandle, DWORD dwLen, LPVOID lpData)
+{
+    file_version_buffer.clear();
+
+    const auto alias_map = cm->get_app_aliases();
+
+    if (!alias_map)
+        return o_GetFileVersionInfoW(lptstrFilename, dwHandle, dwLen, lpData);
+
+    const auto file_name = std::wstring(PathFindFileName(lptstrFilename));
+
+    for (const auto& [k, v] : *alias_map)
+    {
+        const auto k_wstr = utils::str_to_wstr(k);
+        const auto v_wstr = utils::str_to_wstr(v);
+
+        if (!k_wstr || !v_wstr)
+        {
+            SPDLOG_ERROR("failed to convert string to wstring: {}, {}", k, v);
+            return o_GetFileVersionInfoW(lptstrFilename, dwHandle, dwLen, lpData);
+        }
+
+        if (lstrcmpiW(k_wstr->c_str(), file_name.c_str()) != 0)
+            continue;
+
+        // alias should be applied in the next call to VerQueryValueW
+        file_version_buffer = *v_wstr;
+    }
+
+    return o_GetFileVersionInfoW(lptstrFilename, dwHandle, dwLen, lpData);
+}
+
+int WINAPI hk_InternalGetWindowText(HWND hWnd, LPWSTR pString, int cchMaxCount)
+{
+    if (const auto use_app_name = cm->get_always_use_appname())
+    {
+        if (!*use_app_name)
+            return o_InternalGetWindowText(hWnd, pString, cchMaxCount);
+
+        DWORD pid;
+        if (!GetWindowThreadProcessId(hWnd, &pid))
+        {
+            SPDLOG_ERROR("GetWindowThreadProcessId failed");
+            return o_InternalGetWindowText(hWnd, pString, cchMaxCount);
+        }
+
+        const auto app_name = utils::get_exe_product_name_for_pid(pid);
+
+        if (!app_name)
+        {
+            SPDLOG_ERROR("failed to get app name for pid {}", pid);
+            return o_InternalGetWindowText(hWnd, pString, cchMaxCount);
+        }
+
+        wcsncpy_s(pString, cchMaxCount, app_name->c_str(), app_name->length());
+        return static_cast<int>(app_name->length());
+    }
+
+    return o_InternalGetWindowText(hWnd, pString, cchMaxCount);
+}
+
+HRESULT STDMETHODCALLTYPE hk_IsSystemSoundsSession(IAudioSessionControl2* this_ptr)
+{
+    return o_IsSystemSoundsSession(this_ptr);
+}
+
+HRESULT STDMETHODCALLTYPE hk_GetProcessId(IAudioSessionControl2* this_ptr, DWORD* pRetVal)
+{
+    const auto hr = o_GetProcessId(this_ptr, pRetVal);
+
+    if (hr != S_OK)
+        return hr;
+
+    const auto app_name = utils::get_exe_image_name_for_pid(*pRetVal);
+
+    if (!app_name)
+    {
+        SPDLOG_ERROR("failed to get app name for pid {}", *pRetVal);
+        return S_OK;
+    }
+
+    const auto blacklist_opt = cm->get_app_blacklist();
+
+    if (!blacklist_opt)
+        return S_OK;
+
+    const auto& blacklist = *blacklist_opt;
+
+    // app is blacklisted
+    for (const auto& s : blacklist)
+    {
+        const auto wstr = utils::str_to_wstr(s);
+
+        if (!wstr)
+        {
+            SPDLOG_ERROR("failed to convert to wstr");
+            return S_OK;
+        }
+
+        if (lstrcmpiW(wstr->c_str(), app_name->c_str()) == 0)
+        {
+            *pRetVal = 0;
+            return S_FALSE;
+        }
+    }
+
+    return S_OK;
+}
+
+HRESULT STDMETHODCALLTYPE hk_GetSession(IAudioSessionEnumerator* this_ptr, int SessionCount, IAudioSessionControl** Session)
+{
+    if (o_GetProcessId || o_IsSystemSoundsSession)
+        return o_GetSession(this_ptr, SessionCount, Session);
+
+    winrt::com_ptr<IAudioSessionControl> session_control;
+    winrt::com_ptr<IAudioSessionControl2> session_control2;
+    try
+    {
+        winrt::check_hresult(o_GetSession(this_ptr, SessionCount, session_control.put()));
+        winrt::check_hresult(session_control->QueryInterface(__uuidof(IAudioSessionControl2), session_control2.put_void()));
+    }
+    catch (const winrt::hresult_error& ex)
+    {
+        SPDLOG_ERROR("failed to create COM interface: {}, {}", static_cast<uint32_t>(ex.code()), winrt::to_string(ex.message()));
+    }
+
+    // IAudioSessionControl2 vtable layout:
+    // -- IUnknown
+    // 0: QueryInterface
+    // 1: AddRef
+    // 2: Release
+    // -- IAudioSessionControl
+    // 3: GetState
+    // 4: GetDisplayName
+    // 5: SetDisplayName
+    // 6: GetIconPath
+    // 7: SetIconPath
+    // 8: GetGroupingParam
+    // 9: SetGroupingParam
+    // 10: RegisterAudioSessionNotification
+    // 11: UnregisterAudioSessionNotification
+    // -- IAudioSessionControl2
+    // 12: GetSessionIdentifier
+    // 13: GetSessionInstanceIdentifier
+    // 14: GetProcessId
+    // 15: IsSystemSoundsSession
+
+    void** session2_control_vtable = *reinterpret_cast<void***>(session_control2.get());
+
+    // GetProcessId has index 14
+    o_GetProcessId = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IAudioSessionControl2* this_ptr, DWORD* pRetVal)>(session2_control_vtable[14]);
+    utils::hook_single_fn(&reinterpret_cast<PVOID&>(o_GetProcessId), reinterpret_cast<PVOID>(hk_GetProcessId));
+
+    // IsSystemSoundsSession has index 15
+    o_IsSystemSoundsSession = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IAudioSessionControl2* this_ptr)>(session2_control_vtable[15]);
+    utils::hook_single_fn(&reinterpret_cast<PVOID&>(o_IsSystemSoundsSession), reinterpret_cast<PVOID>(hk_IsSystemSoundsSession));
+
+    return o_GetSession(this_ptr, SessionCount, Session);
+}
+
+HRESULT STDMETHODCALLTYPE hk_GetSessionEnumerator(IAudioSessionManager2* this_ptr, IAudioSessionEnumerator** SessionEnum)
+{
+    if (o_GetSession)
+        return o_GetSessionEnumerator(this_ptr, SessionEnum);
+
+    winrt::com_ptr<IAudioSessionEnumerator> session_enumerator;
+    try
+    {
+        winrt::check_hresult(o_GetSessionEnumerator(this_ptr, session_enumerator.put()));
+    }
+    catch (const winrt::hresult_error& ex)
+    {
+        SPDLOG_ERROR("failed to create COM interface: {}, {}", static_cast<uint32_t>(ex.code()), winrt::to_string(ex.message()));
+    }
+
+    // GetSession has index 4 in vtable:
+    // -- IUnknown
+    // 0: QueryInterface
+    // 1: AddRef
+    // 2: Release
+    // -- IAudioSessionEnumerator
+    // 3: GetCount
+    // 4: GetSession
+
+    void** session_enumerator_vtable = *reinterpret_cast<void***>(session_enumerator.get());
+
+    o_GetSession = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IAudioSessionEnumerator* this_ptr, int SessionCount, IAudioSessionControl** Session)>(session_enumerator_vtable[4]);
+    utils::hook_single_fn(&reinterpret_cast<PVOID&>(o_GetSession), reinterpret_cast<PVOID>(hk_GetSession));
+
+    return o_GetSessionEnumerator(this_ptr, SessionEnum);
+}
+
+HRESULT WINAPI hk_CoCreateInstance(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWORD dwClsContext, REFIID riid, LPVOID* ppv)
+{
+    if (!IsEqualCLSID(rclsid, __uuidof(MMDeviceEnumerator)) || !IsEqualIID(riid, __uuidof(IMMDeviceEnumerator)) || o_GetSessionEnumerator)
+        return o_CoCreateInstance(rclsid, pUnkOuter, dwClsContext, riid, ppv);
+
+    winrt::com_ptr<IMMDeviceEnumerator> device_enumerator;
+    winrt::com_ptr<IMMDevice> device;
+    winrt::com_ptr<IAudioSessionManager2> session_manager;
+    winrt::com_ptr<IAudioSessionEnumerator> session_enumerator;
+
+    try
+    {
+        winrt::check_hresult(o_CoCreateInstance(rclsid, pUnkOuter, dwClsContext, riid, device_enumerator.put_void()));
+        winrt::check_hresult(device_enumerator->GetDefaultAudioEndpoint(eRender, eConsole, device.put()));
+        winrt::check_hresult(device->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr, session_manager.put_void()));
+    }
+    catch (const winrt::hresult_error& ex)
+    {
+        SPDLOG_ERROR("failed to create COM interface: {}, {}", static_cast<uint32_t>(ex.code()), winrt::to_string(ex.message()));
+        return ex.code();
+    }
+
+    // IAudioSessionManager2 vtable layout
+    //
+    // -- IUnknown
+    // 0: QueryInterface
+    // 1: AddRef
+    // 2: Release
+    // -- IAudioSessionManager
+    // 3: GetAudioSessionControl
+    // 4: GetSimpleAudioVolume
+    // -- IAudioSessionManager2
+    // 5: GetSessionEnumerator
+    // 6: RegisterSessionNotification
+
+    void** session_manager_vtable = *reinterpret_cast<void***>(session_manager.get());
+
+    // GetSessionEnumerator has index 5 in vtable
+    o_GetSessionEnumerator = reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(IAudioSessionManager2* this_ptr, IAudioSessionEnumerator** SessionEnum)>(session_manager_vtable[5]);
+    utils::hook_single_fn(&reinterpret_cast<PVOID&>(o_GetSessionEnumerator), reinterpret_cast<PVOID>(hk_GetSessionEnumerator));
+
+    return o_CoCreateInstance(rclsid, pUnkOuter, dwClsContext, riid, ppv);
+}
+
+HANDLE WINAPI hk_OpenProcess(DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwProcessId)
+{
+    // On Windows 10/11, we can strip access to only PROCESS_QUERY_LIMITED_INFORMATION 
+    if (dwDesiredAccess == (SYNCHRONIZE | PROCESS_VM_READ | PROCESS_QUERY_INFORMATION))
+        dwDesiredAccess = PROCESS_QUERY_LIMITED_INFORMATION;
+
+    return o_OpenProcess(dwDesiredAccess, bInheritHandle, dwProcessId);
 }
 
 //*****************************//
@@ -1040,6 +1284,11 @@ static std::vector<std::pair<PVOID*, PVOID>> hooks_base = {
     {&reinterpret_cast<PVOID&>(o_DialogBoxIndirectParamA), hk_DialogBoxIndirectParamA},
     {&reinterpret_cast<PVOID&>(o_TrackPopupMenu), hk_TrackPopupMenu},
     {&reinterpret_cast<PVOID&>(o_GetClientRect), hk_GetClientRect},
+    {&reinterpret_cast<PVOID&>(o_CoCreateInstance), hk_CoCreateInstance},
+    {&reinterpret_cast<PVOID&>(o_InternalGetWindowText), hk_InternalGetWindowText},
+    {&reinterpret_cast<PVOID&>(o_GetFileVersionInfoW), hk_GetFileVersionInfoW},
+    {&reinterpret_cast<PVOID&>(o_VerQueryValueW), hk_VerQueryValueW},
+    {&reinterpret_cast<PVOID&>(o_OpenProcess), hk_OpenProcess},
 };
 
 static std::vector<std::pair<PVOID*, PVOID>> hooks_theme = {
@@ -1105,7 +1354,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
     if (fdwReason == DLL_PROCESS_ATTACH)
     {
         utils::attach_console_debug();
-        return utils::hook_single_fn(&reinterpret_cast<PVOID&>(o_CreateMutexA), hk_CreateMutexA);
+        return utils::hook_single_fn(&reinterpret_cast<PVOID&>(o_CreateMutexA), reinterpret_cast<PVOID>(hk_CreateMutexA));
     }
 
     return TRUE;

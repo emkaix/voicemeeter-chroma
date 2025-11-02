@@ -49,6 +49,60 @@ class config_manager
     std::vector<uint8_t> bg_cassette_bitmap_data;
     bool theme_enabled = true;
 
+    std::optional<uint32_t> font_quality;
+    std::optional<float> fader_shift_scroll_step;
+    std::optional<float> fader_scroll_step;
+    std::optional<uint32_t> ui_update_interval;
+    std::optional<bool> restore_size;
+    std::optional<std::vector<std::string>> app_blacklist;
+    std::optional<std::map<std::string, std::string>> app_aliases;
+    std::optional<bool> always_use_appname;
+    std::optional<bool> include_system_session;
+
+private:
+    template <YAML::NodeType::value v, typename T, typename Validator>
+    std::optional<T> get_value(const char* category, const char* key, Validator validator, bool is_mandatory = true)
+    {
+        const auto node_val = yaml_config[category][key];
+
+        if (!node_val.IsDefined() || node_val.IsNull())
+        {
+            if (is_mandatory)
+                SPDLOG_ERROR("Missing value for key '{}'", key);
+            return std::nullopt;
+        }
+
+        if (node_val.Type() != v)
+        {
+            SPDLOG_ERROR("Invalid node type for key '{}'", key);
+            return std::nullopt;
+        }
+
+        try
+        {
+            auto val = node_val.as<T>();
+
+            if (!validator(val))
+            {
+                SPDLOG_ERROR("Value for '{}' not in valid range", key);
+                return std::nullopt;
+            }
+
+            return val;
+        }
+        catch (const YAML::TypedBadConversion<T>&)
+        {
+            SPDLOG_ERROR("Error converting value for key '{}'", key);
+            return std::nullopt;
+        }
+    }
+
+    template <YAML::NodeType::value v, typename T>
+    std::optional<T> get_value(const char* category, const char* key, bool is_mandatory = true)
+    {
+        return get_value<v, T>(category, key, [](const T&) { return true; }, is_mandatory);
+    }
+
 public:
     bool get_theme_enabled();
     void reg_save_wnd_size(uint32_t width, uint32_t height);
@@ -56,11 +110,14 @@ public:
     std::optional<flavor_id> get_current_flavor_id();
     bool init_theme();
     bool load_config();
-    std::optional<uint32_t> cfg_get_font_quality();
-    std::optional<uint32_t> cfg_get_fader_shift_scroll_step();
-    std::optional<uint32_t> cfg_get_fader_scroll_step();
-    std::optional<uint32_t> cfg_get_ui_update_interval();
-    std::optional<bool> cfg_get_restore_size();
+    const std::optional<uint32_t>& get_font_quality();
+    const std::optional<float>& get_fader_shift_scroll_step();
+    const std::optional<float>& get_fader_scroll_step();
+    const std::optional<uint32_t>& get_ui_update_interval();
+    const std::optional<bool>& get_restore_size();
+    const std::optional<std::vector<std::string>>& get_app_blacklist();
+    const std::optional<std::map<std::string, std::string>>& get_app_aliases();
+    const std::optional<bool>& get_always_use_appname();
     std::optional<std::string> cfg_get_color(const std::string& arg_col, const color_category& category);
     const std::vector<uint8_t>& get_bm_data_main();
     const std::vector<uint8_t>& get_bm_data_settings();

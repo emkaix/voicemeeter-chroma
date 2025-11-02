@@ -35,9 +35,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define WNDPROC_SUB_CALL __cdecl
 #endif
 
-const enum flavor_id { FLAVOR_NONE, FLAVOR_DEFAULT, FLAVOR_BANANA, FLAVOR_POTATO };
+enum flavor_id { FLAVOR_NONE, FLAVOR_DEFAULT, FLAVOR_BANANA, FLAVOR_POTATO };
 
-const enum color_category { CATEGORY_TEXT, CATEGORY_SHAPES };
+enum color_category { CATEGORY_TEXT, CATEGORY_SHAPES };
 
 typedef struct flavor_info
 {
@@ -76,24 +76,28 @@ typedef struct signature
     std::string mask;
 } signature_t;
 
-typedef void (ARCH_CALL *o_scroll_handler_t)(uint64_t* a1, HWND hwnd, uint32_t x, uint32_t y, uint32_t a5);
 typedef LRESULT (WNDPROC_SUB_CALL *o_WndProc_chldwnd_t)(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, uint64_t a5);
 
 namespace utils
 {
-void mbox(const std::wstring&);
-void mbox_error(const std::wstring&);
+void mbox(const std::wstring& msg);
+void mbox_error(const std::wstring& msg);
 void attach_console_debug();
-std::optional<std::wstring> str_to_wstr(const std::string&);
-std::optional<std::string> wstr_to_str(const std::wstring&);
-std::string colorref_to_hex(COLORREF);
-std::optional<COLORREF> hex_to_colorref(const std::string&);
-std::optional<PVOID> find_function_signature(const signature_t&);
-bool load_bitmap(const std::wstring&, std::vector<uint8_t>&);
+std::optional<std::wstring> str_to_wstr(const std::string& str);
+std::wstring str_to_wstr_or_default(const std::string& str, const std::wstring& def = L"[conversion error]");
+std::optional<std::string> wstr_to_str(const std::wstring& wstr);
+std::string wstr_to_str_or_default(const std::wstring& wstr, const std::string& def = "[conversion error]");
+std::string colorref_to_hex(COLORREF color);
+std::optional<COLORREF> hex_to_colorref(const std::string& hex);
+std::optional<uint8_t*> find_code_cave(uint8_t* base_handle, size_t size);
+std::optional<std::wstring> get_exe_image_name_for_pid(DWORD pid);
+std::optional<std::wstring> get_exe_product_name_for_pid(DWORD pid);
+std::vector<uint8_t*> find_signatures(const signature_t& sig);
+bool load_bitmap(const std::wstring& path, std::vector<uint8_t>& target);
 std::optional<std::wstring> get_userprofile_path();
 void setup_logging();
-bool apply_scroll_patch64(o_scroll_handler_t);
-bool apply_scroll_patch32(flavor_id flavor_id, uint32_t scroll_value);
+bool apply_scroll_patch64(float* ptr_scroll_value);
+bool apply_scroll_patch32(float* ptr_scroll_value);
 bool hook_single_fn(PVOID* o_fn, PVOID hk_fn);
 
 /**
@@ -102,7 +106,6 @@ bool hook_single_fn(PVOID* o_fn, PVOID hk_fn);
 inline void attach_console_debug()
 {
 #ifndef NDEBUG
-    mbox(L"attached");
     if (!AllocConsole())
         mbox_error(L"AllocConsole");
 

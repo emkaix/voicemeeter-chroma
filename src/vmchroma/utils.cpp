@@ -17,6 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include <windows.h>
 #include <windowsx.h>
+#include <winnt.h>
 #include <psapi.h>
 #include <string>
 #include <optional>
@@ -32,9 +33,10 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "spdlog/spdlog.h"
 #include "spdlog/sinks/rotating_file_sink.h"
 
-#include <capstone/capstone.h>
+#include <winrt/base.h>
 
 #include "detours.h"
+#include "winapi_hook_defs.hpp"
 
 namespace utils
 {
@@ -81,6 +83,12 @@ std::optional<std::wstring> str_to_wstr(const std::string& str)
     return res;
 }
 
+std::wstring str_to_wstr_or_default(const std::string& str, const std::wstring& def)
+{
+    const auto converted = str_to_wstr(str);
+    return converted ? *converted : def;
+}
+
 /**
  * Converts a std::wstring to UTF-8 encoded std::string
  * @param wstr Wide string for conversion
@@ -91,18 +99,24 @@ std::optional<std::string> wstr_to_str(const std::wstring& wstr)
     const int size = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
     if (size == 0)
     {
-        SPDLOG_ERROR("failed to convert string to wstring");
+        SPDLOG_ERROR("failed to convert wstring to string");
         return std::nullopt;
     }
 
-    std::string res(size - 1, 0); // size includes null terminator, subtract 1
+    std::string res(size - 1, 0);
     if (WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, res.data(), size, nullptr, nullptr) == 0)
     {
-        SPDLOG_ERROR("failed to convert string to wstring");
+        SPDLOG_ERROR("failed to convert wstring to string");
         return std::nullopt;
     }
 
     return res;
+}
+
+std::string wstr_to_str_or_default(const std::wstring& wstr, const std::string& def)
+{
+    const auto converted = wstr_to_str(wstr);
+    return converted ? *converted : def;
 }
 
 /**
@@ -164,36 +178,36 @@ std::optional<COLORREF> hex_to_colorref(const std::string& hex)
 }
 
 /**
- * Find non-exported functions using signature scanning
- * Function signatures should be stable across updates
- * Simple O(n*m) implementation
- * @param sig A signature struct containing the byte pattern and a mask
- * @return The absolute address of the function
+ * @brief Scans the main module's memory for all occurrences of a given signature.
+ * @param sig A struct containing the byte pattern and a mask ('?' for wildcards).
+ * @return A std::vector<uint8_t*> containing the address of every match. The vector will be empty if no matches are found or if an error occurs.
  */
-std::optional<PVOID> find_function_signature(const signature_t& sig)
+std::vector<uint8_t*> find_signatures(const signature_t& sig)
 {
+    std::vector<uint8_t*> occurrences;
+
     const auto handle = GetModuleHandle(nullptr);
     MODULEINFO mod_info;
 
     if (!handle)
     {
         SPDLOG_ERROR("failed to get module handle");
-        return std::nullopt;
+        return occurrences;
     }
 
     if (!GetModuleInformation(GetCurrentProcess(), handle, &mod_info, sizeof(mod_info)))
     {
         SPDLOG_ERROR("failed to get module information");
-        return std::nullopt;
+        return occurrences;
     }
 
-    auto start = static_cast<uint8_t*>(mod_info.lpBaseOfDll);
+    const auto start = static_cast<uint8_t*>(mod_info.lpBaseOfDll);
     const size_t end = mod_info.SizeOfImage;
     const size_t pattern_size = sig.pattern.size();
     const uint8_t* pattern = sig.pattern.data();
     const char* mask = sig.mask.data();
 
-    for (size_t i = 0; i < end - pattern_size; i++)
+    for (size_t i = 0; i <= end - pattern_size; i++)
     {
         bool found = true;
 
@@ -207,11 +221,10 @@ std::optional<PVOID> find_function_signature(const signature_t& sig)
         }
 
         if (found)
-            return start + i;
+            occurrences.push_back(start + i);
     }
 
-    SPDLOG_ERROR("signature scan exhausted");
-    return std::nullopt;
+    return occurrences;
 }
 
 /**
@@ -297,144 +310,327 @@ void setup_logging()
     }
 }
 
-/**
- * Patches the mulss instructions to NOPs to disable the hardcoded 3x multiplier dB change when scrolling with the mouse wheel
- * @param handler_fn The beginning of the scroll handler function
- * @return True if patches successfully
- */
-bool apply_scroll_patch64(o_scroll_handler_t handler_fn)
+std::optional<uint8_t*> find_code_cave(uint8_t* base_handle, const size_t size)
 {
-    csh handle;
-    if ((cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK))
+    const auto dos_header = reinterpret_cast<PIMAGE_DOS_HEADER>(base_handle);
+    const auto nt_headers = reinterpret_cast<PIMAGE_NT_HEADERS>(base_handle + dos_header->e_lfanew);
+    const auto section_header = IMAGE_FIRST_SECTION(nt_headers);
+    uint8_t* ptr_text_end = nullptr;
+
+    for (int k = 0; k < nt_headers->FileHeader.NumberOfSections; ++k)
     {
-        SPDLOG_ERROR("failed to init capstone");
-    }
-
-    const auto insn = cs_malloc(handle);
-    size_t size = 500;
-    uint64_t address = 0;
-    auto fn = reinterpret_cast<const uint8_t*>(handler_fn);
-
-    uint8_t* mulss[2] = {nullptr};
-    int i = 0;
-
-    while (cs_disasm_iter(handle, &fn, &size, &address, insn))
-    {
-        if (insn->id == X86_INS_MULSS)
+        if (!strncmp(reinterpret_cast<char*>(section_header[k].Name), ".text", 5))
         {
-            mulss[i] = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(handler_fn) + insn->address);
-            i++;
+            const auto text_start = base_handle + section_header[k].VirtualAddress;
+            ptr_text_end = text_start + section_header[k].Misc.VirtualSize;
         }
     }
 
-    cs_close(&handle);
-
-    const auto mulss1 = mulss[0];
-    const auto mulss2 = mulss[1];
-
-    if (!mulss1 || !mulss2)
+    if (!ptr_text_end)
     {
-        SPDLOG_ERROR("can't find scroll instructions to patch");
+        SPDLOG_ERROR("failed to find .text section end");
+        return std::nullopt;
+    }
+
+    for (int i = 0; i < size; ++i)
+    {
+        if (ptr_text_end[i] != 0)
+        {
+            SPDLOG_ERROR("not enough free bytes at the end of .text section");
+            return std::nullopt;
+        }
+    }
+
+    return ptr_text_end;
+}
+
+std::optional<std::wstring> get_path_for_pid(DWORD pid)
+{
+    const auto proc = o_OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+
+    if (!proc)
+    {
+        SPDLOG_ERROR("error OpenProcess for pid {}", pid);
+        return std::nullopt;
+    }
+
+    std::wstring proc_name(MAX_PATH, '\0');
+
+    DWORD bufferSize = MAX_PATH;
+    if (!QueryFullProcessImageName(proc, 0, proc_name.data(), &bufferSize))
+    {
+        SPDLOG_ERROR("error QueryFullProcessImageName for pid {}", pid);
+        return std::nullopt;
+    }
+
+    CloseHandle(proc);
+
+    proc_name.resize(bufferSize);
+    return proc_name;
+}
+
+std::optional<std::wstring> get_exe_image_name_for_pid(DWORD pid)
+{
+    const auto proc_name = get_path_for_pid(pid);
+
+    if (!proc_name)
+        return std::nullopt;
+
+    const auto file_name = PathFindFileName(proc_name->c_str());
+
+    return std::wstring(file_name);
+}
+
+std::optional<std::wstring> get_exe_product_name_for_pid(DWORD pid)
+{
+    const auto proc_name = get_path_for_pid(pid);
+
+    if (!proc_name)
+        return std::nullopt;
+
+    DWORD dummy;
+    const auto version_info_size = GetFileVersionInfoSize(proc_name->c_str(), &dummy);
+
+    if (version_info_size == 0)
+    {
+        SPDLOG_ERROR("GetFileVersionInfoSize returned 0");
+        return std::nullopt;
+    }
+
+    std::vector<char> version_info(version_info_size);
+
+    // call the hooked function on purpose, so it can return a custom name, if set
+    if (!GetFileVersionInfoW(proc_name->c_str(), 0, version_info_size, version_info.data()))
+    {
+        SPDLOG_ERROR("GetFileVersionInfo failed");
+        return std::nullopt;
+    }
+
+    struct LANGANDCODEPAGE
+    {
+        WORD wLanguage;
+        WORD wCodePage;
+    } * translations;
+
+    UINT translation_len = 0;
+    if (!o_VerQueryValueW(version_info.data(), L"\\VarFileInfo\\Translation", reinterpret_cast<LPVOID*>(&translations), &translation_len))
+    {
+        SPDLOG_ERROR("VerQueryValue failed");
+        return std::nullopt;
+    }
+
+    if (translation_len == 0)
+    {
+        return std::nullopt;
+    }
+
+    std::vector<wchar_t> query_path(256);
+    swprintf_s(query_path.data(), query_path.size(), L"\\StringFileInfo\\%04x%04x\\ProductName", translations[0].wLanguage, translations[0].wCodePage);
+
+    wchar_t* product_name = nullptr;
+    UINT product_name_len = 0;
+
+    // call the hooked function on purpose, so it can return a custom name, if set
+    if (VerQueryValueW(version_info.data(), query_path.data(), reinterpret_cast<LPVOID*>(&product_name), &product_name_len))
+        return std::wstring(product_name, product_name_len);
+
+    return std::nullopt;
+}
+
+/**
+ * Patches the mulss/fmul instructions to change the mouse wheel scroll dB value multiplier
+ * @param ptr_scroll_value Pointer to the scroll step value
+ * @return True if patches successfully
+ */
+bool apply_scroll_patch64(float* ptr_scroll_value)
+{
+    const auto base_handle = reinterpret_cast<uint8_t*>(GetModuleHandle(nullptr));
+
+    if (!base_handle)
+    {
+        SPDLOG_ERROR("failed to get base module handle");
         return false;
     }
 
-    DWORD old_prot;
-    if (!VirtualProtect(mulss1, 8, PAGE_EXECUTE_READWRITE, &old_prot))
+    uint8_t shellcode_multiply[] = {
+        0x51, // push rcx
+        0x48, 0xB9, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov rcx, scroll_value
+        0xF3, 0x0F, 0x10, 0x31, // movss xmm6, [rcx]
+        0xF3, 0x0F, 0x59, 0xC6, // mulss xmm0, xmm6
+        0x59, // pop rcx
+        0xC3 // ret
+    };
+
+    memcpy_s(&shellcode_multiply[3], 8, &ptr_scroll_value, 8);
+
+    const auto ptr_text_end_opt = find_code_cave(base_handle, sizeof(shellcode_multiply));
+
+    if (!ptr_text_end_opt)
+    {
+        SPDLOG_ERROR("failed to get address of .text section");
+        return false;
+    }
+
+    const auto ptr_text_end = *ptr_text_end_opt;
+
+    DWORD dummy;
+
+    if (!VirtualProtect(ptr_text_end, sizeof(shellcode_multiply), PAGE_EXECUTE_READWRITE, &dummy))
     {
         SPDLOG_ERROR("VirtualProtect failed");
         return false;
     }
 
-    memset(mulss1, 0x90, 8);
+    memcpy_s(ptr_text_end, sizeof(shellcode_multiply), shellcode_multiply, sizeof(shellcode_multiply));
 
-    if (!VirtualProtect(mulss1, 8, old_prot, &old_prot))
+    if (!VirtualProtect(ptr_text_end, sizeof(shellcode_multiply), PAGE_EXECUTE_READ, &dummy))
     {
         SPDLOG_ERROR("VirtualProtect failed");
         return false;
     }
 
-    if (!VirtualProtect(mulss2, 8, PAGE_EXECUTE_READWRITE, &old_prot))
+    const signature_t sig_mulss1 = {{0xF3, 0x0F, 0x59, 0x05, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x28, 0xF2, 0xF3, 0x0F, 0x5C, 0xF0, 0x0F, 0x2F, 0xCE}, {"xxxx????xxxxxxxxxx"}};
+    const signature_t sig_mulss2 = {{0xF3, 0x0F, 0x59, 0x05, 0x00, 0x00, 0x00, 0x00, 0xF3, 0x0F, 0x10, 0x94, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x28, 0xF2}, {"xxxx????xxxx?????xxx"}};
+
+    const auto mulss1_occurrences = find_signatures(sig_mulss1);
+    const auto mulss2_occurrences = find_signatures(sig_mulss2);
+
+    std::vector<uint8_t*> mulss_merged;
+
+    mulss_merged.insert(mulss_merged.end(), mulss1_occurrences.begin(), mulss1_occurrences.end());
+    mulss_merged.insert(mulss_merged.end(), mulss2_occurrences.begin(), mulss2_occurrences.end());
+
+    if (mulss_merged.size() != 2)
+    {
+        SPDLOG_ERROR("failed to find instructions to patch");
+        return false;
+    }
+
+    const auto mulss1 = mulss_merged[0];
+    const auto mulss2 = mulss_merged[1];
+
+    uint8_t shellcode_call[] = {
+        0xE8, 0x00, 0x00, 0x00, 0x00, // call <shellcode_multiply>
+        0x90, 0x90, 0x90 // nop; nop; nop
+    };
+
+    if (!VirtualProtect(mulss1, sizeof(shellcode_call), PAGE_EXECUTE_READWRITE, &dummy) || !VirtualProtect(mulss2, sizeof(shellcode_call), PAGE_EXECUTE_READWRITE, &dummy))
     {
         SPDLOG_ERROR("VirtualProtect failed");
         return false;
     }
 
-    memset(mulss2, 0x90, 8);
+    auto offset = ptr_text_end - (mulss1 + 5);
+    memcpy_s(&shellcode_call[1], 4, &offset, 4);
+    memcpy_s(mulss1, sizeof(shellcode_call), &shellcode_call, sizeof(shellcode_call));
 
-    if (!VirtualProtect(mulss1, 8, old_prot, &old_prot))
+    offset = ptr_text_end - (mulss2 + 5);
+    memcpy_s(&shellcode_call[1], 4, &offset, 4);
+    memcpy_s(mulss2, sizeof(shellcode_call), &shellcode_call, sizeof(shellcode_call));
+
+    if (!VirtualProtect(mulss1, sizeof(shellcode_call), PAGE_EXECUTE_READ, &dummy) || !VirtualProtect(mulss2, sizeof(shellcode_call), PAGE_EXECUTE_READ, &dummy))
     {
         SPDLOG_ERROR("VirtualProtect failed");
         return false;
     }
+
+    FlushInstructionCache(base_handle, nullptr, 0);
 
     return true;
 }
 
-bool apply_scroll_patch32(flavor_id flavor_id, uint32_t scroll_value)
+bool apply_scroll_patch32(float* ptr_scroll_value)
 {
-    signature_t sig_fmul1;
-    signature_t sig_mulss2;
+    const auto base_handle = reinterpret_cast<uint8_t*>(GetModuleHandle(nullptr));
 
-    if (flavor_id == FLAVOR_BANANA || flavor_id == FLAVOR_POTATO)
+    if (!base_handle)
     {
-        sig_fmul1 = {{0xDC, 0x0D, 0x0, 0x0, 0x0, 0x0, 0x8D, 0x0, 0x0, 0x0, 0xDE, 0xE9}, "xx????x???xx"};
-        sig_mulss2 = {{0xDC, 0x0D, 0x0, 0x0, 0x0, 0x0, 0x8D, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xDE, 0xE9}, "xx????x??????xx"};
-    }
-    else if (flavor_id == FLAVOR_DEFAULT)
-    {
-        sig_fmul1 = {{0xDC, 0x0D, 0x0, 0x0, 0x0, 0x0, 0x8D, 0x0, 0x0, 0x0, 0xDE, 0xE9}, "xx????x???xx"};
-        sig_mulss2 = {{0xDC, 0x0D, 0x0, 0x0, 0x0, 0x0, 0xDE, 0xE9, 0xD9}, "xx????xxx"};
-    }
-
-    const auto fmul1 = find_function_signature(sig_fmul1);
-    const auto fmul2 = find_function_signature(sig_mulss2);
-
-    if (!fmul1 || !fmul2)
-    {
-        SPDLOG_ERROR("can't find scroll instructions to patch");
+        SPDLOG_ERROR("failed to get base module handle");
         return false;
     }
 
-    const auto p_fmul1_operand = static_cast<uint8_t*>(*fmul1) + 2;
-    const auto p_fmul2_operand = static_cast<uint8_t*>(*fmul2) + 2;
+    uint8_t shellcode_multiply[] = {
+        0x50, // push eax
+        0xB8, 0x00, 0x00, 0x00, 0x00, // mov eax, scroll_value
+        0xD8, 0x08, // fmul qword ptr [eax]
+        0x58, // pop eax
+        0xC3 // ret
+    };
 
-    static double value = scroll_value;
+    memcpy_s(&shellcode_multiply[2], 4, &ptr_scroll_value, 4);
 
-    DWORD old_prot;
-    if (!VirtualProtect(p_fmul1_operand, 4, PAGE_EXECUTE_READWRITE, &old_prot))
+    const auto ptr_text_end_opt = find_code_cave(base_handle, sizeof(shellcode_multiply));
+
+    if (!ptr_text_end_opt)
+    {
+        SPDLOG_ERROR("failed to get address of .text section");
+        return false;
+    }
+
+    const auto ptr_text_end = *ptr_text_end_opt;
+
+    DWORD dummy;
+
+    if (!VirtualProtect(ptr_text_end, sizeof(shellcode_multiply), PAGE_EXECUTE_READWRITE, &dummy))
     {
         SPDLOG_ERROR("VirtualProtect failed");
         return false;
     }
 
-#pragma warning(push)
-#pragma warning(disable : 4311)
-    *reinterpret_cast<uint32_t*>(p_fmul1_operand) = reinterpret_cast<uint32_t>(&value);
-#pragma warning(pop)
+    memcpy_s(ptr_text_end, sizeof(shellcode_multiply), shellcode_multiply, sizeof(shellcode_multiply));
 
-    if (!VirtualProtect(p_fmul1_operand, 4, old_prot, &old_prot))
+    if (!VirtualProtect(ptr_text_end, sizeof(shellcode_multiply), PAGE_EXECUTE_READ, &dummy))
     {
         SPDLOG_ERROR("VirtualProtect failed");
         return false;
     }
 
-    if (!VirtualProtect(p_fmul2_operand, 4, PAGE_EXECUTE_READWRITE, &old_prot))
+    const signature_t sig_fmul1 = {{0xD9, 0x0, 0x0, 0x0, 0xDB, 0x45, 0x00, 0xDC, 0x0D}, "x???xx?xx"};
+    const signature_t sig_fmul2 = {{0xD9, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xDB, 0x45, 0x0, 0xDC, 0x0D}, "x??????xx?xx"};
+
+    const auto fmul1_occurrences = find_signatures(sig_fmul1);
+    const auto fmul2_occurrences = find_signatures(sig_fmul2);
+
+    std::vector<uint8_t*> fmul_merged;
+
+    fmul_merged.insert(fmul_merged.end(), fmul1_occurrences.begin(), fmul1_occurrences.end());
+    fmul_merged.insert(fmul_merged.end(), fmul2_occurrences.begin(), fmul2_occurrences.end());
+
+    if (fmul_merged.size() != 2)
+    {
+        SPDLOG_ERROR("failed to find instructions to patch");
+        return false;
+    }
+
+    const auto fmul1 = fmul_merged[0] + 7;
+    const auto fmul2 = fmul_merged[1] + 10;
+
+    uint8_t shellcode_call[] = {
+        0xE8, 0x00, 0x00, 0x00, 0x00, // call <shellcode_multiply>
+        0x90 // nop
+    };
+
+    if (!VirtualProtect(fmul1, sizeof(shellcode_call), PAGE_EXECUTE_READWRITE, &dummy) || !VirtualProtect(fmul2, sizeof(shellcode_call), PAGE_EXECUTE_READWRITE, &dummy))
     {
         SPDLOG_ERROR("VirtualProtect failed");
         return false;
     }
 
-#pragma warning(push)
-#pragma warning(disable : 4311)
-    *reinterpret_cast<uint32_t*>(p_fmul2_operand) = reinterpret_cast<uint32_t>(&value);
-#pragma warning(pop)
+    auto offset = ptr_text_end - (fmul1 + 5);
+    memcpy_s(&shellcode_call[1], 4, &offset, 4);
+    memcpy_s(fmul1, sizeof(shellcode_call), &shellcode_call, sizeof(shellcode_call));
 
-    if (!VirtualProtect(p_fmul2_operand, 4, old_prot, &old_prot))
+    offset = ptr_text_end - (fmul2 + 5);
+    memcpy_s(&shellcode_call[1], 4, &offset, 4);
+    memcpy_s(fmul2, sizeof(shellcode_call), &shellcode_call, sizeof(shellcode_call));
+
+    if (!VirtualProtect(fmul1, sizeof(shellcode_call), PAGE_EXECUTE_READ, &dummy) || !VirtualProtect(fmul2, sizeof(shellcode_call), PAGE_EXECUTE_READ, &dummy))
     {
         SPDLOG_ERROR("VirtualProtect failed");
         return false;
     }
 
+    FlushInstructionCache(base_handle, nullptr, 0);
 
     return true;
 }

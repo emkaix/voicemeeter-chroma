@@ -22,8 +22,10 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 
+#include "winapi_hook_defs.hpp"
 #include "window_manager.hpp"
 #include "yaml-cpp/yaml.h"
+
 
 /**
  * Saves the current window dimensions to the windows registry
@@ -87,7 +89,7 @@ void config_manager::reg_save_wnd_size(uint32_t width, uint32_t height)
 bool config_manager::reg_get_wnd_size(uint32_t& width, uint32_t& height)
 {
     std::wstring sub_key;
-    auto cur_flavor = get_current_flavor_id();
+    const auto cur_flavor = get_current_flavor_id();
 
     if (cur_flavor == FLAVOR_NONE)
     {
@@ -104,8 +106,8 @@ bool config_manager::reg_get_wnd_size(uint32_t& width, uint32_t& height)
     if (cur_flavor == FLAVOR_DEFAULT)
         sub_key = reg_sub_key_default;
 
-    HKEY hKey;
-    auto result = RegOpenKeyExW(HKEY_CURRENT_USER, sub_key.c_str(), 0, KEY_READ, &hKey);
+    HKEY key;
+    auto result = RegOpenKeyExW(HKEY_CURRENT_USER, sub_key.c_str(), 0, KEY_READ, &key);
 
     // key doesn't exist yet
     if (result == ERROR_FILE_NOT_FOUND)
@@ -117,28 +119,28 @@ bool config_manager::reg_get_wnd_size(uint32_t& width, uint32_t& height)
         return false;
     }
 
-    DWORD dataSize = sizeof(DWORD);
+    DWORD data_size = sizeof(DWORD);
     DWORD type;
 
-    result = RegQueryValueExW(hKey, reg_val_wnd_size_width.c_str(), nullptr, &type, reinterpret_cast<LPBYTE>(&width), &dataSize);
+    result = RegQueryValueExW(key, reg_val_wnd_size_width.c_str(), nullptr, &type, reinterpret_cast<LPBYTE>(&width), &data_size);
 
-    if (result != ERROR_SUCCESS || type != REG_DWORD || dataSize != sizeof(DWORD))
+    if (result != ERROR_SUCCESS || type != REG_DWORD || data_size != sizeof(DWORD))
     {
         SPDLOG_ERROR("Error reading width registry value: {}", result);
-        RegCloseKey(hKey);
+        RegCloseKey(key);
         return false;
     }
 
-    result = RegQueryValueExW(hKey, reg_val_wnd_size_height.c_str(), nullptr, &type, reinterpret_cast<LPBYTE>(&height), &dataSize);
+    result = RegQueryValueExW(key, reg_val_wnd_size_height.c_str(), nullptr, &type, reinterpret_cast<LPBYTE>(&height), &data_size);
 
-    if (result != ERROR_SUCCESS || type != REG_DWORD || dataSize != sizeof(DWORD))
+    if (result != ERROR_SUCCESS || type != REG_DWORD || data_size != sizeof(DWORD))
     {
         SPDLOG_ERROR("Error reading height registry value: {}", result);
-        RegCloseKey(hKey);
+        RegCloseKey(key);
         return false;
     }
 
-    RegCloseKey(hKey);
+    RegCloseKey(key);
     return true;
 }
 
@@ -160,17 +162,17 @@ std::optional<flavor_id> config_manager::get_current_flavor_id()
     }
 
     DWORD dummy;
-    DWORD versionInfoSize = GetFileVersionInfoSize(executable_name.c_str(), &dummy);
+    DWORD version_info_size = GetFileVersionInfoSize(executable_name.c_str(), &dummy);
 
-    if (versionInfoSize == 0)
+    if (version_info_size == 0)
     {
         SPDLOG_ERROR("GetFileVersionInfoSize returned 0");
         return std::nullopt;
     }
 
-    std::vector<char> versionInfo(versionInfoSize);
+    std::vector<char> version_info(version_info_size);
 
-    if (!GetFileVersionInfo(executable_name.c_str(), 0, versionInfoSize, versionInfo.data()))
+    if (!o_GetFileVersionInfoW(executable_name.c_str(), 0, version_info_size, version_info.data()))
     {
         SPDLOG_ERROR("GetFileVersionInfo failed");
         return std::nullopt;
@@ -180,13 +182,13 @@ std::optional<flavor_id> config_manager::get_current_flavor_id()
     UINT valueLen = 0;
     const std::wstring query = L"\\StringFileInfo\\000004b0\\ProductName";
 
-    if (!VerQueryValue(versionInfo.data(), query.data(), &value, &valueLen) || valueLen <= 0)
+    if (!o_VerQueryValueW(version_info.data(), query.data(), &value, &valueLen) || valueLen <= 0)
     {
         SPDLOG_ERROR("VerQueryValue failed");
         return std::nullopt;
     }
 
-    std::wstring product_name = static_cast<wchar_t*>(value);
+    const std::wstring product_name = static_cast<wchar_t*>(value);
 
     if (product_name == L"VoiceMeeter")
     {
@@ -216,7 +218,7 @@ std::optional<flavor_id> config_manager::get_current_flavor_id()
  */
 bool config_manager::init_theme()
 {
-    auto flavor_id = get_current_flavor_id();
+    const auto flavor_id = get_current_flavor_id();
 
     if (!flavor_id)
     {
@@ -227,24 +229,15 @@ bool config_manager::init_theme()
     active_flavor = flavor_map[*flavor_id];
 
     // no theme specified
-    if (!yaml_config["theme"][active_flavor.name].IsScalar())
+    const auto active_theme_name = get_value<YAML::NodeType::Scalar, std::string>("theme", active_flavor.name.c_str(), false);
+
+    if (!active_theme_name)
     {
         theme_enabled = false;
         return true;
     }
 
-    std::string active_theme_name_str;
-    try
-    {
-        active_theme_name_str = yaml_config["theme"][active_flavor.name].as<std::string>();
-    }
-    catch (YAML::TypedBadConversion<std::string>&)
-    {
-        SPDLOG_ERROR("error parsing theme name");
-        return false;
-    }
-
-    auto active_theme_name_wstr = utils::str_to_wstr(active_theme_name_str);
+    auto active_theme_name_wstr = utils::str_to_wstr(*active_theme_name);
 
     if (!active_theme_name_wstr)
     {
@@ -264,45 +257,51 @@ bool config_manager::init_theme()
 
     std::wstring theme_path = (std::filesystem::path(*userprofile_path) / L"themes" / *active_theme_name_wstr / *active_flavor_name);
 
+    if (!std::filesystem::exists(std::filesystem::path(theme_path)))
+    {
+        SPDLOG_ERROR("can't find themes folder {}", utils::wstr_to_str_or_default(theme_path));
+        return false;
+    }
+
     if (!std::filesystem::exists(std::filesystem::path(theme_path) / BM_FILE_BG))
     {
-        SPDLOG_ERROR("can't find {} in themes folder", *utils::wstr_to_str(BM_FILE_BG));
+        SPDLOG_ERROR("can't find {} in themes folder", utils::wstr_to_str_or_default(BM_FILE_BG));
         return false;
     }
 
     if (!utils::load_bitmap(std::filesystem::path(theme_path) / BM_FILE_BG, bg_main_bitmap_data))
     {
-        SPDLOG_ERROR("error loading {}", *utils::wstr_to_str(BM_FILE_BG));
+        SPDLOG_ERROR("error loading {}", utils::wstr_to_str_or_default(BM_FILE_BG));
         return false;
     }
 
     if (!std::filesystem::exists(std::filesystem::path(theme_path) / BM_FILE_BG_SETTINGS))
     {
-        SPDLOG_ERROR("can't find {} in themes folder", *utils::wstr_to_str(BM_FILE_BG_SETTINGS));
+        SPDLOG_ERROR("can't find {} in themes folder", utils::wstr_to_str_or_default(BM_FILE_BG_SETTINGS));
         return false;
     }
 
     if (!utils::load_bitmap(std::filesystem::path(theme_path) / BM_FILE_BG_SETTINGS, bg_settings_bitmap_data))
     {
-        SPDLOG_ERROR("error loading {}", *utils::wstr_to_str(BM_FILE_BG_SETTINGS));
+        SPDLOG_ERROR("error loading {}", utils::wstr_to_str_or_default(BM_FILE_BG_SETTINGS));
         return false;
     }
 
     if (!std::filesystem::exists(std::filesystem::path(theme_path) / BM_FILE_BG_CASSETTE))
     {
-        SPDLOG_ERROR("can't find {} in themes folder", *utils::wstr_to_str(BM_FILE_BG_CASSETTE));
+        SPDLOG_ERROR("can't find {} in themes folder", utils::wstr_to_str_or_default(BM_FILE_BG_CASSETTE));
         return false;
     }
 
     if (!utils::load_bitmap(std::filesystem::path(theme_path) / BM_FILE_BG_CASSETTE, bg_cassette_bitmap_data))
     {
-        SPDLOG_ERROR("error loading {}", *utils::wstr_to_str(BM_FILE_BG_CASSETTE));
+        SPDLOG_ERROR("error loading {}", utils::wstr_to_str_or_default(BM_FILE_BG_CASSETTE));
         return false;
     }
 
     if (!std::filesystem::exists(std::filesystem::path(*userprofile_path) / L"themes" / *active_theme_name_wstr / CONFIG_FILE_COLORS))
     {
-        SPDLOG_ERROR("can't find {}", *utils::wstr_to_str(CONFIG_FILE_COLORS));
+        SPDLOG_ERROR("can't find {}", utils::wstr_to_str_or_default(CONFIG_FILE_COLORS));
         return false;
     }
 
@@ -310,7 +309,7 @@ bool config_manager::init_theme()
 
     if (!colors_file.is_open())
     {
-        SPDLOG_ERROR("can't open {}", *utils::wstr_to_str(CONFIG_FILE_COLORS));
+        SPDLOG_ERROR("can't open {}", utils::wstr_to_str_or_default(CONFIG_FILE_COLORS));
         return false;
     }
 
@@ -320,7 +319,7 @@ bool config_manager::init_theme()
     }
     catch (YAML::ParserException&)
     {
-        SPDLOG_ERROR("failed to parse {}", *utils::wstr_to_str(CONFIG_FILE_COLORS));
+        SPDLOG_ERROR("failed to parse {}", utils::wstr_to_str_or_default(CONFIG_FILE_COLORS));
         return false;
     }
 
@@ -333,7 +332,7 @@ bool config_manager::init_theme()
  */
 bool config_manager::load_config()
 {
-    auto userprofile_path = utils::get_userprofile_path();
+    const auto userprofile_path = utils::get_userprofile_path();
 
     if (!userprofile_path)
     {
@@ -343,7 +342,7 @@ bool config_manager::load_config()
 
     if (!std::filesystem::exists(std::filesystem::path(*userprofile_path) / CONFIG_FILE_THEME))
     {
-        SPDLOG_ERROR("{} not found", *utils::wstr_to_str(CONFIG_FILE_THEME));
+        SPDLOG_ERROR("config file not found");
         return false;
     }
 
@@ -351,9 +350,9 @@ bool config_manager::load_config()
 
     if (!cfg_file.is_open())
     {
-        SPDLOG_ERROR("can't open {}", *utils::wstr_to_str(CONFIG_FILE_THEME));
+        SPDLOG_ERROR("can't open config file");
         return false;
-    }
+    }    
 
     try
     {
@@ -361,135 +360,21 @@ bool config_manager::load_config()
     }
     catch (YAML::ParserException&)
     {
-        SPDLOG_ERROR("failed to parse {}", *utils::wstr_to_str(CONFIG_FILE_THEME));
+        SPDLOG_ERROR("failed to parse config file");
         return false;
     }
 
+    font_quality = get_value<YAML::NodeType::Scalar, uint32_t>("misc", "fontQuality", [](const uint32_t x) { return x <= 6; });
+    fader_shift_scroll_step = get_value<YAML::NodeType::Scalar, float>("misc", "faderShiftScrollStep");
+    fader_scroll_step = get_value<YAML::NodeType::Scalar, float>("misc", "faderScrollStep");
+    ui_update_interval = get_value<YAML::NodeType::Scalar, uint32_t>("misc", "updateIntervalUI", [](const uint32_t x) { return x >= 16; });
+    restore_size = get_value<YAML::NodeType::Scalar, bool>("misc", "restoreSize");
+    app_blacklist = get_value<YAML::NodeType::Sequence, std::vector<std::string>>("potato", "appBlacklist", false);
+    app_aliases = get_value<YAML::NodeType::Map, std::map<std::string, std::string>>("potato", "appAliasMap", false);
+    always_use_appname = get_value<YAML::NodeType::Scalar, bool>("potato", "alwaysUseAppName");
+    include_system_session = get_value<YAML::NodeType::Scalar, bool>("potato", "includeSystemSoundSession");
+
     return true;
-}
-
-/**
- * Gets the font quality value from the config
- * @return Font quality value
- */
-std::optional<uint32_t> config_manager::cfg_get_font_quality()
-{
-    if (!yaml_config["misc"]["fontQuality"].IsScalar())
-    {
-        SPDLOG_ERROR("missing fontQuality value");
-        return std::nullopt;
-    }
-
-    try
-    {
-        auto val = yaml_config["misc"]["fontQuality"].as<uint32_t>();
-
-        if (val > 6)
-        {
-            SPDLOG_ERROR("fontQuality value must be between 0 and 6");
-            return std::nullopt;
-        }
-
-        return val;
-    }
-    catch (YAML::TypedBadConversion<uint32_t>&)
-    {
-        SPDLOG_ERROR("error fontQuality value");
-        return std::nullopt;
-    }
-}
-
-/**
- * Gets the fader shift scroll value from the config
- * @return Fader shift scroll value
- */
-std::optional<uint32_t> config_manager::cfg_get_fader_shift_scroll_step()
-{
-    if (!yaml_config["misc"]["faderShiftScrollStep"].IsScalar())
-    {
-        SPDLOG_ERROR("missing faderShiftScrollStep value");
-        return std::nullopt;
-    }
-
-    try
-    {
-        return yaml_config["misc"]["faderShiftScrollStep"].as<uint32_t>();
-    }
-    catch (YAML::TypedBadConversion<uint32_t>&)
-    {
-        SPDLOG_ERROR("error faderShiftScrollStep value");
-        return std::nullopt;
-    }
-}
-
-/**
- * Gets the fader scroll value from the config
- * @return Fader scroll value
- */
-std::optional<uint32_t> config_manager::cfg_get_fader_scroll_step()
-{
-    if (!yaml_config["misc"]["faderScrollStep"].IsScalar())
-    {
-        SPDLOG_ERROR("missing faderScrollStep value");
-        return std::nullopt;
-    }
-
-    try
-    {
-        return yaml_config["misc"]["faderScrollStep"].as<uint32_t>();
-    }
-    catch (YAML::TypedBadConversion<uint32_t>&)
-    {
-        SPDLOG_ERROR("error faderScrollStep value");
-        return std::nullopt;
-    }
-
-}
-
-/**
- * Gets the UI update interval from the config
- * @return UI update interval value
- */
-std::optional<uint32_t> config_manager::cfg_get_ui_update_interval()
-{
-    if (!yaml_config["misc"]["updateIntervalUI"].IsScalar())
-    {
-        SPDLOG_ERROR("missing updateIntervalUI value");
-        return std::nullopt;
-    }
-
-    try
-    {
-        return yaml_config["misc"]["updateIntervalUI"].as<uint32_t>();
-    }
-    catch (YAML::TypedBadConversion<uint32_t>&)
-    {
-        SPDLOG_ERROR("error updateIntervalUI value");
-        return std::nullopt;
-    }
-}
-
-/**
- * Gets the "restore size on start" value from the config
- * @return "restore size on start" value
- */
-std::optional<bool> config_manager::cfg_get_restore_size()
-{
-    if (!yaml_config["misc"]["restoreSize"].IsScalar())
-    {
-        SPDLOG_ERROR("missing restoreSize value");
-        return std::nullopt;
-    }
-
-    try
-    {
-        return yaml_config["misc"]["restoreSize"].as<bool>();
-    }
-    catch (YAML::TypedBadConversion<bool>&)
-    {
-        SPDLOG_ERROR("error restoreSize value");
-        return std::nullopt;
-    }
 }
 
 /**
@@ -511,10 +396,8 @@ std::optional<std::string> config_manager::cfg_get_color(const std::string& arg_
     for (auto it = category_node.begin(); it != category_node.end(); ++it)
     {
         auto current_color = it->first.as<std::string>();
-        std::string current_color_upper(current_color.size(), '\0');
-        std::transform(current_color.begin(), current_color.end(), current_color_upper.begin(), ::toupper);
 
-        if (current_color_upper == arg_col)
+        if (lstrcmpiA(current_color.c_str(), arg_col.c_str()) == 0)
         {
             auto ret = it->second.as<std::string>();
 
@@ -546,6 +429,46 @@ const std::vector<uint8_t>& config_manager::get_bm_data_cassette()
 const flavor_info_t& config_manager::get_active_flavor()
 {
     return active_flavor;
+}
+
+const std::optional<uint32_t>& config_manager::get_font_quality()
+{
+    return font_quality;
+}
+
+const std::optional<float>& config_manager::get_fader_shift_scroll_step()
+{
+    return fader_shift_scroll_step;
+}
+
+const std::optional<float>& config_manager::get_fader_scroll_step()
+{
+    return fader_scroll_step;
+}
+
+const std::optional<uint32_t>& config_manager::get_ui_update_interval()
+{
+    return ui_update_interval;
+}
+
+const std::optional<bool>& config_manager::get_restore_size()
+{
+    return restore_size;
+}
+
+const std::optional<std::vector<std::string>>& config_manager::get_app_blacklist()
+{
+    return app_blacklist;
+}
+
+const std::optional<std::map<std::string, std::string>>& config_manager::get_app_aliases()
+{
+    return app_aliases;
+}
+
+const std::optional<bool>& config_manager::get_always_use_appname()
+{
+    return always_use_appname;
 }
 
 bool config_manager::get_theme_enabled()
