@@ -1,0 +1,37 @@
+name: CI Build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Project
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure 32-bit build
+        run: cmake -S . -B build32 -G "Visual Studio 17 2022" -A Win32
+
+      - name: Build 32-bit (Release)
+        run: cmake --build build32 --config Release
+
+      - name: Configure 64-bit build
+        run: cmake -S . -B build64 -G "Visual Studio 17 2022" -A x64
+
+      - name: Build 64-bit (Release)
+        run: cmake --build build64 --config Release
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: out/
