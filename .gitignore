@@ -5,7 +5,5 @@ build32/
 build64/
 out/addimport*
 out/vmchroma*
-src/addimport/addimport.rc
-src/vmchroma/vmchroma.rc
 sign_executables.ps1
 vmchroma_cert.pfx
