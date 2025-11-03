@@ -20,14 +20,14 @@ jobs:
       - name: Configure 32-bit build
         run: cmake -S . -B build32 -G "Visual Studio 17 2022" -A Win32
 
-      - name: Build 32-bit (Release)
-        run: cmake --build build32 --config Release
+      - name: Build 32-bit (Debug)
+        run: cmake --build build32 --config Debug
 
       - name: Configure 64-bit build
         run: cmake -S . -B build64 -G "Visual Studio 17 2022" -A x64
 
-      - name: Build 64-bit (Release)
-        run: cmake --build build64 --config Release
+      - name: Build 64-bit (Debug)
+        run: cmake --build build64 --config Debug
 
       - name: Sign Artifacts
         shell: pwsh
