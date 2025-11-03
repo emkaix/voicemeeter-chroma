@@ -1,0 +1,30 @@
+#include <winver.h>
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 0,0,1,0
+PRODUCTVERSION 0,0,1,0
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE 0x0L
+{
+    BLOCK "StringFileInfo"
+    {
+        BLOCK "040904E4" // Language: US English, Unicode
+        {
+            VALUE "CompanyName", "Klaus Hahnenkamp"
+            VALUE "FileDescription", "Add DLL to target executable's imports"
+            VALUE "FileVersion", "0.0.1.0"
+            VALUE "InternalName", "AddImport"
+            VALUE "LegalCopyright", "Copyright (C) 2025 Klaus Hahnenkamp"
+            VALUE "OriginalFilename", "addimport.exe"
+            VALUE "ProductName", "AddImport"
+            VALUE "ProductVersion", "0.0.1.0"
+        }
+    }
+    BLOCK "VarFileInfo"
+    {
+        VALUE "Translation", 0x409, 1252
+    }
+}
