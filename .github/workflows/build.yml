@@ -29,6 +29,20 @@ jobs:
       - name: Build 64-bit (Release)
         run: cmake --build build64 --config Release
 
+      - name: Sign Artifacts
+        shell: pwsh
+        run: |
+          $pfx_file_path = "signing_cert.pfx"
+          $pfx_cert_b64 = "${{ secrets.CERTIFICATE_PFX_BASE64 }}"
+          $pfx_password = "${{ secrets.CERTIFICATE_PFX_PASSWORD }}"
+                    
+          $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2([Convert]::FromBase64String($pfx_cert_b64), $pfx_password)
+          
+          Set-AuthenticodeSignature "out\vmchroma32.dll" -Certificate $cert
+          Set-AuthenticodeSignature "out\vmchroma64.dll" -Certificate $cert
+          Set-AuthenticodeSignature "out\addimport32.exe" -Certificate $cert
+          Set-AuthenticodeSignature "out\addimport64.exe" -Certificate $cert
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
