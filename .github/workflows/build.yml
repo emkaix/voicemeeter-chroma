@@ -1,5 +1,8 @@
 name: VMChroma Snapshot Build
 
+permissions:
+  contents: write
+
 on:
   push:
     branches:
@@ -35,16 +38,46 @@ jobs:
           $pfx_file_path = "signing_cert.pfx"
           $pfx_cert_b64 = "${{ secrets.CERTIFICATE_PFX_BASE64 }}"
           $pfx_password = "${{ secrets.CERTIFICATE_PFX_PASSWORD }}"
-                    
+          
           $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2([Convert]::FromBase64String($pfx_cert_b64), $pfx_password)
           
           Set-AuthenticodeSignature "out\vmchroma32.dll" -Certificate $cert
           Set-AuthenticodeSignature "out\vmchroma64.dll" -Certificate $cert
           Set-AuthenticodeSignature "out\addimport32.exe" -Certificate $cert
           Set-AuthenticodeSignature "out\addimport64.exe" -Certificate $cert
+      
+      #      - name: Upload build artifacts
+      #        uses: actions/upload-artifact@v4
+      #        with:
+      #          name: vmchroma_snapshot_${{ github.sha }}
+      #          path: out/
 
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+      - name: Delete old prerelease and tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          try {
+            echo $env:GITHUB_TOKEN | gh auth login --with-token
+            gh release delete snapshot-latest -y --cleanup-tag
+          }
+          catch {
+            Write-Host "No 'snapshot-latest' release found to delete, or another error occurred: $_"
+          }
+
+      - name: Zip Artifacts
+        shell: pwsh
+        run: |
+          $shortSha = $env:GITHUB_SHA.Substring(0, 7)
+          Get-ChildItem -Path out\ -Filter *.pdb | Remove-Item
+          Compress-Archive -Path out\* -DestinationPath "vmchroma-snapshot-$shortSha.zip"
+
+      - name: Create Snapshot Prerelease
+        uses: softprops/action-gh-release@v1
         with:
-          name: vmchroma_snapshot_${{ github.sha }}
-          path: out/
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: snapshot-latest
+          name: snapshot_latest
+          body: This is an automated snapshot build for the latest commit
+          prerelease: true
+          files: vmchroma-snapshot-*.zip
