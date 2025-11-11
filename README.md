@@ -7,9 +7,9 @@
 </p>
 
 <p align="center">
-   <img alt="GitHub Release" src="https://img.shields.io/github/v/release/emkaix/voicemeeter-themes-mod?style=flat&colorB=f38ba8">
-   <img alt="Github Downloads" src="https://img.shields.io/github/downloads/emkaix/voicemeeter-themes-mod/total?style=flat&colorB=a6e3a1" />
-   <img alt="GitHub License" src="https://img.shields.io/github/license/emkaix/voicemeeter-themes-mod?style=flat&colorB=89b4fa" />
+   <img alt="GitHub Release" src="https://img.shields.io/github/v/release/emkaix/voicemeeter-chroma?style=flat&colorB=f38ba8">
+   <img alt="Github Downloads" src="https://img.shields.io/github/downloads/emkaix/voicemeeter-chroma/total?style=flat&colorB=a6e3a1" />
+   <img alt="GitHub License" src="https://img.shields.io/github/license/emkaix/voicemeeter-chroma?style=flat&colorB=89b4fa" />
 </p>
 
 
