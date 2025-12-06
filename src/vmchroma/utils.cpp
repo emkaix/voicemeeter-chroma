@@ -55,8 +55,8 @@ void mbox(const std::wstring& msg)
  */
 void mbox_error(const std::wstring& msg)
 {
-    mbox(L"error: " + msg);
-    exit(1);
+    MessageBoxW(nullptr, msg.c_str(), L"VMChroma", MB_ICONERROR | MB_OK);
+    TerminateProcess(GetCurrentProcess(), 1);
 }
 
 /**
@@ -392,10 +392,7 @@ std::optional<std::wstring> get_exe_product_name_for_pid(DWORD pid)
     const auto version_info_size = GetFileVersionInfoSize(proc_name->c_str(), &dummy);
 
     if (version_info_size == 0)
-    {
-        SPDLOG_ERROR("GetFileVersionInfoSize returned 0");
         return std::nullopt;
-    }
 
     std::vector<char> version_info(version_info_size);
 

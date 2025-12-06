@@ -57,7 +57,7 @@ class config_manager
     std::optional<std::vector<std::string>> app_blacklist;
     std::optional<std::map<std::string, std::string>> app_aliases;
     std::optional<bool> always_use_appname;
-    std::optional<bool> include_system_session;
+    // std::optional<bool> include_system_session;
 
 private:
     template <YAML::NodeType::value v, typename T, typename Validator>

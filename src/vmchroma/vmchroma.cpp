@@ -63,6 +63,7 @@ int (WINAPI *o_InternalGetWindowText)(HWND hWnd, LPWSTR pString, int cchMaxCount
 BOOL (WINAPI *o_GetFileVersionInfoW)(LPCWSTR lptstrFilename, DWORD dwHandle, DWORD dwLen, LPVOID lpData) = GetFileVersionInfoW;
 BOOL (WINAPI *o_VerQueryValueW)(LPCVOID pBlock, LPCWSTR lpSubBlock, LPVOID* lplpBuffer, PUINT puLen) = VerQueryValueW;
 HANDLE (WINAPI *o_OpenProcess)(DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwProcessId) = OpenProcess;
+DWORD (WINAPI *o_GetModuleFileNameA)(HMODULE hModule, LPSTR lpFilename, DWORD nSize) = GetModuleFileNameA;
 
 //******************//
 //       COM        //
@@ -81,6 +82,7 @@ std::unique_ptr<window_manager> wm;
 std::unique_ptr<config_manager> cm;
 
 static bool init_entered = false;
+static bool wndproc_create_finished = false;
 static float scroll_value = 3.0f;
 static WNDPROC o_WndProc_main = nullptr;
 static o_WndProc_chldwnd_t o_WndProc_comp = nullptr;
@@ -370,7 +372,7 @@ BOOL WINAPI hk_GetClientRect(HWND hWnd, LPRECT lpRect)
         SPDLOG_ERROR("Error finding parent window");
         return o_GetClientRect(hWnd, lpRect);
     }
-    
+
     auto parent_class_name = std::wstring(256, '\0');
     const int parent_len = GetClassNameW(parent_hwnd, parent_class_name.data(), 256);
     parent_class_name.resize(parent_len);
@@ -557,6 +559,8 @@ LRESULT ARCH_CALL hk_WndProc_main(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             SPDLOG_ERROR("unable to apply scroll patch");
             return ret;
         }
+
+        wndproc_create_finished = true;
 
         return ret;
     }
@@ -1063,20 +1067,14 @@ int WINAPI hk_InternalGetWindowText(HWND hWnd, LPWSTR pString, int cchMaxCount)
 
         DWORD pid;
         if (!GetWindowThreadProcessId(hWnd, &pid))
-        {
-            SPDLOG_ERROR("GetWindowThreadProcessId failed");
             return o_InternalGetWindowText(hWnd, pString, cchMaxCount);
-        }
 
         const auto app_name = utils::get_exe_product_name_for_pid(pid);
 
         if (!app_name)
-        {
-            SPDLOG_ERROR("failed to get app name for pid {}", pid);
             return o_InternalGetWindowText(hWnd, pString, cchMaxCount);
-        }
 
-        wcsncpy_s(pString, cchMaxCount, app_name->c_str(), app_name->length());
+        wcsncpy_s(pString, cchMaxCount, app_name->c_str(), _TRUNCATE);
         return static_cast<int>(app_name->length());
     }
 
@@ -1267,6 +1265,36 @@ HANDLE WINAPI hk_OpenProcess(DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD d
     return o_OpenProcess(dwDesiredAccess, bInheritHandle, dwProcessId);
 }
 
+DWORD WINAPI hk_GetModuleFileNameA(HMODULE hModule, LPSTR lpFilename, DWORD nSize)
+{
+    DWORD ret = o_GetModuleFileNameA(hModule, lpFilename, nSize);
+
+    const size_t suffix_len = 13; 
+    const size_t remove_len = 9;
+
+    char vmchroma_path[MAX_PATH] = {0};
+    o_GetModuleFileNameA(nullptr, vmchroma_path, MAX_PATH);
+
+    // only replace the the name when the integrity checks are not done yet
+    if (ret > 0 && _stricmp(lpFilename, vmchroma_path) == 0 && !wndproc_create_finished)
+    {
+        char* suffix_ptr = lpFilename + ret - suffix_len;
+
+        if (_stricmp(suffix_ptr, "_vmchroma.exe") == 0)
+        {
+            memcpy(suffix_ptr, ".exe", 5);
+
+            if (!std::filesystem::exists(lpFilename))
+            {
+                utils::mbox_error(L"can't find original executable in Voicemeeter directory, make sure it exists and is not renamed.");
+            }
+            return ret - static_cast<DWORD>(remove_len);
+        }
+    }
+
+    return ret;
+}
+
 //*****************************//
 //        DETOURS SETUP        //
 //*****************************//
@@ -1289,6 +1317,7 @@ static std::vector<std::pair<PVOID*, PVOID>> hooks_base = {
     {&reinterpret_cast<PVOID&>(o_GetFileVersionInfoW), hk_GetFileVersionInfoW},
     {&reinterpret_cast<PVOID&>(o_VerQueryValueW), hk_VerQueryValueW},
     {&reinterpret_cast<PVOID&>(o_OpenProcess), hk_OpenProcess},
+    {&reinterpret_cast<PVOID&>(o_GetModuleFileNameA), hk_GetModuleFileNameA},
 };
 
 static std::vector<std::pair<PVOID*, PVOID>> hooks_theme = {

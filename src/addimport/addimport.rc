@@ -14,7 +14,7 @@ FILESUBTYPE 0x0L
         BLOCK "040904E4" // Language: US English, Unicode
         {
             VALUE "CompanyName", "Klaus Hahnenkamp"
-            VALUE "FileDescription", "Add DLL to target executable's imports"
+            VALUE "FileDescription", "AddImport"
             VALUE "FileVersion", "0.0.1.0"
             VALUE "InternalName", "AddImport"
             VALUE "LegalCopyright", "Copyright (C) 2025 Klaus Hahnenkamp"

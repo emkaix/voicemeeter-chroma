@@ -372,7 +372,7 @@ bool config_manager::load_config()
     app_blacklist = get_value<YAML::NodeType::Sequence, std::vector<std::string>>("potato", "appBlacklist", false);
     app_aliases = get_value<YAML::NodeType::Map, std::map<std::string, std::string>>("potato", "appAliasMap", false);
     always_use_appname = get_value<YAML::NodeType::Scalar, bool>("potato", "alwaysUseAppName");
-    include_system_session = get_value<YAML::NodeType::Scalar, bool>("potato", "includeSystemSoundSession");
+    // include_system_session = get_value<YAML::NodeType::Scalar, bool>("potato", "includeSystemSoundSession");
 
     return true;
 }

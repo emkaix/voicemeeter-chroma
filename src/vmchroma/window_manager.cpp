@@ -16,6 +16,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #include "window_manager.hpp"
+
+#include "utils.hpp"
 #include "winapi_hook_defs.hpp"
 #include "spdlog/spdlog.h"
 
@@ -237,6 +239,7 @@ void window_manager::render(HWND hwnd)
     catch (const winrt::hresult_error& ex)
     {
         SPDLOG_ERROR("render error: {}, {}", static_cast<uint32_t>(ex.code()), winrt::to_string(ex.message()));
+        utils::mbox_error(L"D2D render error");
     }
 }
 

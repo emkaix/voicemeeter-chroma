@@ -147,7 +147,7 @@ if (EXISTS "${CMAKE_SOURCE_DIR}/src/addimport/addimport.rc")
 endif ()
 
 add_executable(${TARGET_ADDIMPORT} ${ADDIMPORT_SOURCES})
-target_compile_options(${TARGET_ADDIMPORT} PRIVATE /MD)
+target_compile_options(${TARGET_ADDIMPORT} PRIVATE /MT)
 target_include_directories(${TARGET_ADDIMPORT} PUBLIC ${DETOURS_SOURCE})
 target_link_libraries(${TARGET_ADDIMPORT} PRIVATE
         lib_detours

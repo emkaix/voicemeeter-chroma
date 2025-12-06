@@ -7,3 +7,4 @@ out/addimport*
 out/vmchroma*
 sign_executables.ps1
 vmchroma_cert.pfx
+certum_sign.bat

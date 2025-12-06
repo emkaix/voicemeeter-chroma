@@ -40,9 +40,6 @@ static BOOL CALLBACK cb(PVOID pContext, LPCSTR pszFile, LPCSTR* ppszOutFile)
 
 int wmain(int argc, wchar_t* argv[])
 {
-    // int argc;
-    // auto argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-
     if (argv == nullptr)
     {
         MessageBoxW(nullptr, L"Failed to parse command line", L"Error", MB_OK);

@@ -14,7 +14,7 @@ FILESUBTYPE 0x0L
         BLOCK "040904E4" // Language: US English, Unicode
         {
             VALUE "CompanyName", "Klaus Hahnenkamp"
-            VALUE "FileDescription", "Theme support for Voicemeeter"
+            VALUE "FileDescription", "VMChroma"
             VALUE "FileVersion", "0.0.3.0"
             VALUE "InternalName", "vmchroma"
             VALUE "LegalCopyright", "Copyright (C) 2025 Klaus Hahnenkamp"
