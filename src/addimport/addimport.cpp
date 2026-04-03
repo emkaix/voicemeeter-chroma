@@ -20,6 +20,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <fstream>
 
 static std::wstring dll_path;
+static std::string res;
 
 static BOOL CALLBACK cb(PVOID pContext, LPCSTR pszFile, LPCSTR* ppszOutFile)
 {
@@ -27,9 +28,12 @@ static BOOL CALLBACK cb(PVOID pContext, LPCSTR pszFile, LPCSTR* ppszOutFile)
 
     if (!pszFile && !*added_dll)
     {
-        const int size = WideCharToMultiByte(CP_UTF8, 0, dll_path.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        static std::string res(size - 1, 0);
-        WideCharToMultiByte(CP_UTF8, 0, dll_path.c_str(), -1, res.data(), size, nullptr, nullptr);
+        if (res.empty())
+        {
+            const int size = WideCharToMultiByte(CP_UTF8, 0, dll_path.c_str(), static_cast<int>(dll_path.size()), nullptr, 0, nullptr, nullptr);
+            res.resize(size, 0);
+            WideCharToMultiByte(CP_UTF8, 0, dll_path.c_str(), static_cast<int>(dll_path.size()), res.data(), size, nullptr, nullptr);
+        }
 
         *ppszOutFile = res.c_str();
         *added_dll = true;
@@ -53,7 +57,7 @@ int wmain(int argc, wchar_t* argv[])
     }
 
     dll_path = argv[1];
-    wprintf(L"adding %s", dll_path.c_str());
+    wprintf(L"adding %s\n", dll_path.c_str());
 
     const std::wstring exe_path_old = argv[2];
     const std::wstring exe_path_new = argv[3];
