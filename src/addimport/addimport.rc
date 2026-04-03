@@ -1,8 +1,8 @@
 #include <winver.h>
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 0,0,1,0
-PRODUCTVERSION 0,0,1,0
+FILEVERSION 0,0,1,1
+PRODUCTVERSION 0,0,1,1
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0
 FILEOS VOS_NT_WINDOWS32
@@ -15,12 +15,12 @@ FILESUBTYPE 0x0L
         {
             VALUE "CompanyName", "Klaus Hahnenkamp"
             VALUE "FileDescription", "AddImport"
-            VALUE "FileVersion", "0.0.1.0"
+            VALUE "FileVersion", "0.0.1.1"
             VALUE "InternalName", "AddImport"
-            VALUE "LegalCopyright", "Copyright (C) 2025 Klaus Hahnenkamp"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Klaus Hahnenkamp"
             VALUE "OriginalFilename", "addimport.exe"
             VALUE "ProductName", "AddImport"
-            VALUE "ProductVersion", "0.0.1.0"
+            VALUE "ProductVersion", "0.0.1.1"
         }
     }
     BLOCK "VarFileInfo"

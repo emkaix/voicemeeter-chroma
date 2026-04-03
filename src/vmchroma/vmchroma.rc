@@ -1,8 +1,8 @@
 #include <winver.h>
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 0,0,3,0
-PRODUCTVERSION 0,0,3,0
+FILEVERSION 0,0,3,1
+PRODUCTVERSION 0,0,3,1
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0
 FILEOS VOS_NT_WINDOWS32
@@ -15,12 +15,12 @@ FILESUBTYPE 0x0L
         {
             VALUE "CompanyName", "Klaus Hahnenkamp"
             VALUE "FileDescription", "VMChroma"
-            VALUE "FileVersion", "0.0.3.0"
+            VALUE "FileVersion", "0.0.3.1"
             VALUE "InternalName", "vmchroma"
-            VALUE "LegalCopyright", "Copyright (C) 2025 Klaus Hahnenkamp"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Klaus Hahnenkamp"
             VALUE "OriginalFilename", "vmchroma.dll"
             VALUE "ProductName", "VMChroma"
-            VALUE "ProductVersion", "0.0.3.0"
+            VALUE "ProductVersion", "0.0.3.1"
         }
     }
     BLOCK "VarFileInfo"
