@@ -289,12 +289,12 @@ void setup_logging()
     if (!userprofile_path_wstr)
         mbox_error(L"setup_logging: failed to get user profile path");
 
-    auto userprofile_path = wstr_to_str(*userprofile_path_wstr);
+    auto dir_path = std::filesystem::path(*userprofile_path_wstr) / L"themes";
+    
+    std::error_code ec;
+    std::filesystem::create_directories(dir_path, ec);
 
-    if (!userprofile_path)
-        mbox_error(L"setup_logging: string conversion error");
-
-    const std::string log_file_path = (std::filesystem::path(*userprofile_path) / "themes" / "vmchroma_log.txt").string();
+    const std::wstring log_file_path = (dir_path / L"vmchroma_log.txt").wstring();
 
     try
     {
@@ -306,7 +306,7 @@ void setup_logging()
     }
     catch (const spdlog::spdlog_ex& ex)
     {
-        mbox_error(L"logger setup error:");
+        mbox_error(L"logger setup error: " + str_to_wstr_or_default(ex.what(), L"unknown error"));
     }
 }
 

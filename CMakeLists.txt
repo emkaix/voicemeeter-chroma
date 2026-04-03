@@ -29,6 +29,7 @@ add_compile_definitions(
         UNICODE
         ARCH_POSTFIX="${ARCH_POSTFIX}"
         SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE
+        SPDLOG_WCHAR_FILENAMES
 )
 
 if (MSVC)
