@@ -1,3 +1,11 @@
+param (
+    [string]$UserDocsPath = ""
+)
+
+if ($UserDocsPath -eq "") {
+    $UserDocsPath = [Environment]::GetFolderPath(5)
+}
+
 function Pause
 {
     Write-Host
@@ -9,12 +17,15 @@ function Pause
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator"))
 {
     Write-Host "Script not running as administrator. Requesting elevation..." -ForegroundColor Yellow
-    Start-Process powershell "-ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    Start-Process powershell "-ExecutionPolicy Bypass -File `"$PSCommandPath`" -UserDocsPath `"$UserDocsPath`"" -Verb RunAs
     exit
 }
 
+[Console]::BackgroundColor = "Black"
+Clear-Host
+
 # Get current script directory
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$scriptDir = $PSScriptRoot
 
 # Required files in script directory
 $requiredFiles = @("vmchroma32.dll", "vmchroma64.dll", "addimport32.exe", "addimport64.exe", "vmchroma.yaml")
@@ -105,32 +116,28 @@ foreach ($exe in $vmNamesExist32 + $vmNamesExist64)
 # Run addimport.exe for both 64-bit and 32-bit
 foreach ($exe in $vmNamesExist32)
 {
-    $cmd32 = "& `"$scriptDir\addimport32.exe`" vmchroma32.dll `"$voicemeeterPath\$exe`" `"$voicemeeterPath\$( $exe -replace '\.exe$', '_vmchroma.exe' )`""
-
     Write-Host
     Write-Host "Patching 32bit target: $( $exe -replace '\.exe$', '_vmchroma.exe' )" -ForegroundColor Yellow
-    Invoke-Expression $cmd32
-    if ($LASTEXITCODE -ne 0)
+    $process = Start-Process -FilePath "$scriptDir\addimport32.exe" -ArgumentList "vmchroma32.dll", "`"$voicemeeterPath\$exe`"", "`"$voicemeeterPath\$( $exe -replace '\.exe$', '_vmchroma.exe' )`"" -Wait -NoNewWindow -PassThru
+    if ($process.ExitCode -ne 0)
     {
-        Write-Host "addimport32.exe failed for $exe with exit code $LASTEXITCODE. Exiting..." -ForegroundColor Red
+        Write-Host "addimport32.exe failed for $exe with exit code $($process.ExitCode). Exiting..." -ForegroundColor Red
         Pause
-        exit $LASTEXITCODE
+        if ($process.ExitCode) { exit $process.ExitCode } else { exit 1 }
     }
     Write-Host "Successfully patched: $( $exe -replace '\.exe$', '_vmchroma.exe' )" -ForegroundColor Green
 }
 
 foreach ($exe in $vmNamesExist64)
 {
-    $cmd64 = "& `"$scriptDir\addimport64.exe`" vmchroma64.dll `"$voicemeeterPath\$exe`" `"$voicemeeterPath\$( $exe -replace '\.exe$', '_vmchroma.exe' )`""
-
     Write-Host
     Write-Host "Patching 64bit target: $( $exe -replace '\.exe$', '_vmchroma.exe' )" -ForegroundColor Yellow
-    Invoke-Expression $cmd64
-    if ($LASTEXITCODE -ne 0)
+    $process = Start-Process -FilePath "$scriptDir\addimport64.exe" -ArgumentList "vmchroma64.dll", "`"$voicemeeterPath\$exe`"", "`"$voicemeeterPath\$( $exe -replace '\.exe$', '_vmchroma.exe' )`"" -Wait -NoNewWindow -PassThru
+    if ($process.ExitCode -ne 0)
     {
-        Write-Host "addimport64.exe failed for $exe with exit code $LASTEXITCODE. Exiting..." -ForegroundColor Red
+        Write-Host "addimport64.exe failed for $exe with exit code $($process.ExitCode). Exiting..." -ForegroundColor Red
         Pause
-        exit $LASTEXITCODE
+        if ($process.ExitCode) { exit $process.ExitCode } else { exit 1 }
     }
     Write-Host "Successfully patched: $( $exe -replace '\.exe$', '_vmchroma.exe' )" -ForegroundColor Green
 }
@@ -165,11 +172,15 @@ foreach ($dll in @("vmchroma32.dll", "vmchroma64.dll"))
 # Copy vmchroma.yaml to Documents/Voicemeeter
 
 $vmchromaConfigSource = Join-Path $scriptDir "vmchroma.yaml"
-$documentsPath = Join-Path ([Environment]::GetFolderPath(5)) "Voicemeeter"
+$documentsPath = Join-Path $UserDocsPath "Voicemeeter"
 $vmchromaConfigDest = Join-Path $documentsPath "vmchroma.yaml"
 
 Write-Host
 Write-Host "Copy vmchroma.yaml to $documentsPath folder..." -ForegroundColor Cyan
+
+if (-not (Test-Path $documentsPath)) {
+    New-Item -ItemType Directory -Path $documentsPath -Force | Out-Null
+}
 
 try
 {
