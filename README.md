@@ -63,9 +63,9 @@ It then copies `vmchroma32.dll` and `vmchroma64.dll` into the Voicemeeter instal
 
 Tested on Windows 10 & Windows 11 for the following Voicemeeter versions:
 
-- ✅ `Default 1.1.1.9`
-- ✅ `Banana 2.1.1.9`
-- ✅ `Potato 3.1.1.9`
+- ✅ `Standard 1.1.2.2`
+- ✅ `Banana 2.1.2.2`
+- ✅ `Potato 3.1.2.2`
 
 (Older versions may work as well).
 
